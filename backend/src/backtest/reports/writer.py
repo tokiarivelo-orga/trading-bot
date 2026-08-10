@@ -17,7 +17,7 @@ REPORTS_DIR = Path(__file__).resolve().parent
 def write_report(report: BacktestReport, reports_dir: Path = REPORTS_DIR) -> Path:
     reports_dir.mkdir(parents=True, exist_ok=True)
     path = reports_dir / f"{report.strategy}_{report.symbol}_{report.period.replace(':', '_')}.json"
-    path.write_text(json.dumps(_to_jsonable(report), indent=2))
+    path.write_text(json.dumps(to_jsonable(report), indent=2))
     return path
 
 
@@ -75,7 +75,13 @@ def _realism_lines(report: BacktestReport) -> list[str]:
     return lines
 
 
-def _to_jsonable(value: Any) -> Any:
+def to_jsonable(value: Any) -> Any:
+    """Recursively converts a dataclass tree (datetimes -> ISO strings, `inf`/
+    `nan` floats -> `null`, dataclasses -> plain dicts) into something
+    `json.dumps` accepts. Public (not `_to_jsonable`) because
+    `reports/walk_forward_writer.py` (OBSERVABILITY_PLAN.md Phase 6 Pass B)
+    reuses it for `WalkForwardReport`, which is its own dataclass tree, not a
+    `BacktestReport`."""
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, float) and not math.isfinite(value):
@@ -84,7 +90,7 @@ def _to_jsonable(value: Any) -> Any:
         # (the API schema documents null as "no losing trades").
         return None
     if isinstance(value, tuple | list):
-        return [_to_jsonable(v) for v in value]
+        return [to_jsonable(v) for v in value]
     if hasattr(value, "__dataclass_fields__"):
-        return {f: _to_jsonable(getattr(value, f)) for f in value.__dataclass_fields__}
+        return {f: to_jsonable(getattr(value, f)) for f in value.__dataclass_fields__}
     return value

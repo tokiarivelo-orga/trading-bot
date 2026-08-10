@@ -7,6 +7,12 @@ backtest CLI.  The two new endpoints added here —
     GET  /backtest/run/{job_id}   – poll job status / retrieve the new report
 expose the same logic as `python -m src.backtest.cli` through the UI so the
 trader never needs to open a terminal.
+
+The `/backtest/walk-forward/*` endpoints near the bottom of this file
+(OBSERVABILITY_PLAN.md Phase 6 Pass B) are the same job/report pattern again,
+for `application.walk_forward.run_walk_forward` instead of `run_backtest` —
+deliberately kept in a separate job store and background-task function so
+they never intersect with the single-run machinery above.
 """
 
 from __future__ import annotations
@@ -29,7 +35,14 @@ from src.backtest.api.schemas import (
     BacktestReportSummaryOut,
     DivergenceMetricOut,
     DivergenceReportOut,
+    FoldResultOut,
     ImportBacktestReportIn,
+    WalkForwardJobStatusOut,
+    WalkForwardReportDetailOut,
+    WalkForwardReportListOut,
+    WalkForwardReportSummaryOut,
+    WalkForwardRunIn,
+    WalkForwardRunOut,
 )
 from src.backtest.application.period import parse_period
 from src.backtest.application.run_backtest import (
@@ -39,7 +52,12 @@ from src.backtest.application.run_backtest import (
     NoSymbolSpecError,
     run_backtest,
 )
+from src.backtest.application.walk_forward import run_walk_forward
 from src.backtest.domain.divergence import FillSample, compute_divergence
+from src.backtest.reports.walk_forward_writer import (
+    WALK_FORWARD_REPORTS_DIR,
+    write_walk_forward_report,
+)
 from src.backtest.reports.writer import REPORTS_DIR, write_report
 from src.market_data.application.history import CandleHistoryService
 from src.market_data.domain.models import MarketDataUnavailable, Timeframe
@@ -925,4 +943,274 @@ async def get_report_divergence(
             )
             for m in report.metrics
         ],
+    )
+
+
+# ── Walk-forward harness (OBSERVABILITY_PLAN.md Phase 6 Pass B) ──────────────
+#
+# Same job/report pattern as the single-run machinery above
+# (`_jobs`/`_run_job`/`POST /backtest/run`/...), for
+# `application.walk_forward.run_walk_forward` instead of `run_backtest`. Kept
+# in its own job store and background-task function so this never touches
+# the single-run machinery above — see this file's module docstring.
+
+_wf_jobs: dict[str, dict[str, Any]] = {}
+
+
+async def _run_wf_job(
+    job_id: str,
+    strategy_id: str,
+    symbol: str,
+    period: str,
+    candle_history: CandleHistoryService,
+    fold_months: int = 1,
+    starting_balance: float = DEFAULT_STARTING_BALANCE,
+    min_lot_fallback_enabled: bool | None = None,
+    max_risk_per_trade_pct: float | None = None,
+    min_rr: float | None = None,
+) -> None:
+    """Background runner for `POST /backtest/walk-forward/run`.
+
+    `run_walk_forward` already skips an individual fold that has no candle
+    history rather than raising (see its own docstring) — unlike `_run_job`,
+    there is no per-call `NoHistoryError` to catch and retry after. What CAN
+    still happen is the *entire* period having no history at all (a symbol
+    never backfilled before): every fold in the split gets skipped, which
+    surfaces here as `report.fold_count == 0`. That one case gets the same
+    auto-backfill-then-retry-once treatment `_run_job` gives a single-run
+    `NoHistoryError`. A run where only SOME folds were skipped (partial
+    gaps) is accepted as-is rather than retried — forcing a whole-run retry
+    over one bad month would defeat the harness's own point ("one bad month
+    doesn't abort the whole run").
+    """
+    _wf_jobs[job_id]["status"] = _JobStatus.RUNNING
+    try:
+        settings = Settings()
+        strategy_name = _resolve_strategy_name(strategy_id, settings.database_url)
+        # See _run_job's identical comment: pass through a validated-but-not-
+        # active version id so the registry loads THAT exact version.
+        preferred_version_id = None if strategy_id == "breakout_v1" else strategy_id
+        registry = _build_full_registry(settings.database_url, preferred_version_id)
+        report = await run_walk_forward(
+            strategy_name,
+            symbol,
+            period,
+            fold_months=fold_months,
+            database_url=settings.database_url,
+            strategy_source=registry,
+            starting_balance=starting_balance,
+            min_lot_fallback_enabled=min_lot_fallback_enabled,
+            max_risk_per_trade_pct=max_risk_per_trade_pct,
+            min_rr=min_rr,
+        )
+        if report.fold_count == 0:
+            logger.info(
+                "walk-forward job %s: every fold skipped (no history) for %s %s — "
+                "auto-backfilling",
+                job_id,
+                symbol,
+                period,
+            )
+            await _auto_backfill(candle_history, symbol, period)
+            report = await run_walk_forward(
+                strategy_name,
+                symbol,
+                period,
+                fold_months=fold_months,
+                database_url=settings.database_url,
+                strategy_source=registry,
+                starting_balance=starting_balance,
+                min_lot_fallback_enabled=min_lot_fallback_enabled,
+                max_risk_per_trade_pct=max_risk_per_trade_pct,
+                min_rr=min_rr,
+            )
+            if report.fold_count == 0:
+                _wf_jobs[job_id]["status"] = _JobStatus.ERROR
+                _wf_jobs[job_id]["error"] = (
+                    f"no candle history for {symbol} in any fold of {period}, even after "
+                    "auto-backfill — the broker's own history may not reach that far back"
+                )
+                return
+        path = write_walk_forward_report(report)
+        _wf_jobs[job_id]["status"] = _JobStatus.DONE
+        _wf_jobs[job_id]["report_id"] = path.stem
+    except MarketDataUnavailable as exc:
+        _wf_jobs[job_id]["status"] = _JobStatus.ERROR
+        _wf_jobs[job_id]["error"] = f"gateway unreachable, could not auto-backfill history: {exc}"
+    except (ValueError, NoHistoryError, NoSymbolSpecError) as exc:
+        _wf_jobs[job_id]["status"] = _JobStatus.ERROR
+        _wf_jobs[job_id]["error"] = str(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Walk-forward job %s failed", job_id)
+        _wf_jobs[job_id]["status"] = _JobStatus.ERROR
+        _wf_jobs[job_id]["error"] = repr(exc)
+
+
+@router.post(
+    "/walk-forward/run",
+    response_model=WalkForwardRunOut,
+    status_code=202,
+    summary="Launch a walk-forward backtest job",
+    description=(
+        "Starts a walk-forward run asynchronously: splits `period` into `fold_months`-sized "
+        "consecutive windows and runs each as an INDEPENDENT out-of-sample backtest via the "
+        "same `run_backtest()` machinery `POST /backtest/run` uses — see "
+        "`application/walk_forward.py`'s module docstring for why this is deliberately NOT "
+        "classic in-sample-refit walk-forward optimization (this repo's strategies have "
+        "fixed parameters; there is nothing to refit between folds). Poll "
+        "`GET /backtest/walk-forward/run/{job_id}` for status; when done, fetch the "
+        "aggregate report (mean/stddev/worst-fold profit factor, losing-fold count, and the "
+        "full per-fold breakdown) via `GET /backtest/walk-forward/reports/{report_id}`. "
+        "**This can take roughly `fold_count` times as long as a single backtest** — a "
+        "12-month period at the default monthly fold_months runs 12 full backtests, not "
+        "one. Like `POST /backtest/run`, missing candle history is auto-backfilled from the "
+        "gateway before replaying."
+    ),
+)
+async def start_walk_forward(
+    body: WalkForwardRunIn,
+    background_tasks: BackgroundTasks,
+    request: Request,
+) -> WalkForwardRunOut:
+    job_id = str(uuid.uuid4())
+    _wf_jobs[job_id] = {"status": _JobStatus.PENDING, "report_id": None, "error": None}
+    candle_history = request.app.state.container.candle_history
+    background_tasks.add_task(
+        _run_wf_job,
+        job_id,
+        body.strategy_id,
+        body.symbol,
+        body.period,
+        candle_history,
+        body.fold_months,
+        body.starting_balance,
+        body.min_lot_fallback_enabled,
+        body.max_risk_per_trade_pct,
+        body.min_rr,
+    )
+    return WalkForwardRunOut(job_id=job_id, status=_JobStatus.PENDING)
+
+
+@router.get(
+    "/walk-forward/run/{job_id}",
+    response_model=WalkForwardJobStatusOut,
+    summary="Poll a walk-forward job's status",
+    description=(
+        "Same polling contract as GET /backtest/run/{job_id}, for a walk-forward job: "
+        "'pending' -> 'running' -> 'done' (report_id set) or 'error' (error set)."
+    ),
+    responses={404: {"description": "No walk-forward job with that id."}},
+)
+async def get_wf_job_status(
+    job_id: str = PathParam(description="Job ID returned by POST /backtest/walk-forward/run."),
+) -> WalkForwardJobStatusOut:
+    job = _wf_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="walk-forward job not found")
+    return WalkForwardJobStatusOut(
+        job_id=job_id,
+        status=job["status"],
+        report_id=job.get("report_id"),
+        error=job.get("error"),
+    )
+
+
+@router.get(
+    "/walk-forward/reports",
+    response_model=WalkForwardReportListOut,
+    summary="List saved walk-forward reports",
+    description=(
+        "Headline aggregate stats for walk-forward report files under "
+        "`backend/src/backtest/reports/walk_forward/` (a separate directory from single-"
+        "backtest reports, so this listing never has to handle a differently-shaped file), "
+        "newest first, paginated via `limit`/`offset`. Reports are written by "
+        "`POST /backtest/walk-forward/run` or `python -m src.backtest.walk_forward_cli`; "
+        "this endpoint never triggers a run itself."
+    ),
+)
+async def list_wf_reports(
+    limit: int = Query(
+        default=20, ge=1, le=200, description="Max number of reports to return."
+    ),
+    offset: int = Query(
+        default=0, ge=0, description="Number of newest reports to skip before this page."
+    ),
+) -> WalkForwardReportListOut:
+    if not WALK_FORWARD_REPORTS_DIR.exists():
+        return WalkForwardReportListOut(items=[], total=0, limit=limit, offset=offset)
+    paths = sorted(
+        WALK_FORWARD_REPORTS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
+    page = paths[offset : offset + limit]
+    items = [_wf_summary(_load(p), p.stem) for p in page]
+    return WalkForwardReportListOut(items=items, total=len(paths), limit=limit, offset=offset)
+
+
+@router.get(
+    "/walk-forward/reports/{report_id}",
+    response_model=WalkForwardReportDetailOut,
+    summary="Get a single walk-forward report",
+    description=(
+        "Full report for `report_id` (the filename stem returned by "
+        "GET /backtest/walk-forward/reports) — aggregate stats (mean/stddev/worst-fold "
+        "profit factor, losing-fold count) plus the per-fold breakdown, for the walk-"
+        "forward report detail page."
+    ),
+    responses={404: {"description": "No walk-forward report file with that id."}},
+)
+async def get_wf_report(
+    report_id: str = PathParam(
+        description="Report id, as returned by GET /backtest/walk-forward/reports."
+    ),
+) -> WalkForwardReportDetailOut:
+    if not _VALID_ID.match(report_id):
+        raise HTTPException(status_code=404, detail="walk-forward report not found")
+    path = WALK_FORWARD_REPORTS_DIR / f"{report_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="walk-forward report not found")
+    data = _load(path)
+    return WalkForwardReportDetailOut(
+        **_wf_summary(data, report_id).model_dump(),
+        folds=[FoldResultOut(**fold) for fold in data["folds"]],
+    )
+
+
+@router.delete(
+    "/walk-forward/reports/{report_id}",
+    status_code=204,
+    summary="Delete a saved walk-forward report",
+    description=(
+        "Hard-deletes the report file for `report_id` under "
+        "`backend/src/backtest/reports/walk_forward/`. This cannot be undone."
+    ),
+    responses={404: {"description": "No walk-forward report file with that id."}},
+)
+async def delete_wf_report(
+    report_id: str = PathParam(
+        description="Report id, as returned by GET /backtest/walk-forward/reports."
+    ),
+) -> None:
+    if not _VALID_ID.match(report_id):
+        raise HTTPException(status_code=404, detail="walk-forward report not found")
+    path = WALK_FORWARD_REPORTS_DIR / f"{report_id}.json"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="walk-forward report not found")
+    path.unlink()
+
+
+def _wf_summary(data: dict[str, Any], report_id: str) -> WalkForwardReportSummaryOut:
+    return WalkForwardReportSummaryOut(
+        id=report_id,
+        strategy=data["strategy"],
+        symbol=data["symbol"],
+        period=data["period"],
+        fold_months=data["fold_months"],
+        starting_balance=data["starting_balance"],
+        fold_count=data["fold_count"],
+        folds_with_zero_trades=data["folds_with_zero_trades"],
+        losing_fold_count=data["losing_fold_count"],
+        mean_profit_factor=data.get("mean_profit_factor"),
+        stddev_profit_factor=data.get("stddev_profit_factor"),
+        worst_fold_profit_factor=data.get("worst_fold_profit_factor"),
+        mean_expectancy=data["mean_expectancy"],
     )

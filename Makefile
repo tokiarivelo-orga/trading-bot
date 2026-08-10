@@ -189,6 +189,12 @@ backtest: ## Run a strategy backtest: make backtest strategy=breakout_v1 symbol=
 		{ echo 'usage: make backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-06'; exit 1; }
 	cd backend && uv run python -m src.backtest.cli "$(strategy)" "$(symbol)" "$(period)"
 
+.PHONY: walk-forward-backtest
+walk-forward-backtest: ## Run a walk-forward backtest (independent out-of-sample folds, not in-sample refit): make walk-forward-backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-12 [fold_months=1]
+	@test -n "$(strategy)" && test -n "$(symbol)" && test -n "$(period)" || \
+		{ echo 'usage: make walk-forward-backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-12 [fold_months=1]'; exit 1; }
+	cd backend && uv run python -m src.backtest.walk_forward_cli "$(strategy)" "$(symbol)" "$(period)" $(fold_months)
+
 .PHONY: seed-indicators
 seed-indicators: ## Seed the 15 PoB pattern/confirmation indicators into the indicator DB (safe to re-run)
 	cd backend && uv run python -m scripts.seed_pob_indicators

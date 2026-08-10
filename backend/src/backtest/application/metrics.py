@@ -40,6 +40,20 @@ def avg_r(trades: tuple[BacktestTrade, ...]) -> float:
     return sum(r_values) / len(r_values)
 
 
+def expectancy(trades: tuple[BacktestTrade, ...]) -> float:
+    """Average profit per trade, in account currency. Same definition as
+    `journal.domain.analytics.BotAnalytics.expectancy`
+    (`total_profit / len(closed)`) — kept as its own function here rather
+    than imported from `journal` because `backtest` doesn't reach into
+    another module's internals (see CLAUDE.md); distinct from `avg_r`, which
+    averages the R-multiple (risk-normalized) instead of raw currency and
+    silently drops trades with no SL. Used per-fold by the walk-forward
+    harness (OBSERVABILITY_PLAN.md Phase 6 Pass B) to flag a losing fold."""
+    if not trades:
+        return 0.0
+    return sum(t.profit for t in trades) / len(trades)
+
+
 def worst_losing_streak(trades: tuple[BacktestTrade, ...]) -> int:
     worst = 0
     current = 0

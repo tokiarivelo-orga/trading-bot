@@ -35,6 +35,16 @@ gateway/run/
 backend/src/backtest/reports/*
 !backend/src/backtest/reports/.gitkeep
 !backend/src/backtest/reports/*.py
+# Walk-forward reports (OBSERVABILITY_PLAN.md Phase 6 Pass B) live in their
+# own subdirectory so the single-report glob never has to handle their shape
+# — carve it out the same way: a blanket "ignore everything under reports/"
+# also matches the walk_forward/ directory entry itself, which blocks git
+# from ever looking inside it, so the directory has to be un-ignored before
+# its own .gitkeep/*.py negations can take effect.
+!backend/src/backtest/reports/walk_forward/
+backend/src/backtest/reports/walk_forward/*
+!backend/src/backtest/reports/walk_forward/.gitkeep
+!backend/src/backtest/reports/walk_forward/*.py
 
 # OS / editors
 .DS_Store

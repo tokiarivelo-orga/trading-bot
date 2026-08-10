@@ -1,5 +1,7 @@
 from datetime import UTC, datetime
 
+import pytest
+
 from src.backtest.application import metrics
 from src.backtest.domain.models import BacktestTrade, EquityPoint
 
@@ -82,3 +84,17 @@ def test_worst_losing_streak_counts_consecutive_losses():
 
 def test_worst_losing_streak_no_losses_is_zero():
     assert metrics.worst_losing_streak((make_trade(1.0), make_trade(2.0))) == 0
+
+
+def test_expectancy_no_trades_is_zero():
+    assert metrics.expectancy(()) == 0.0
+
+
+def test_expectancy_averages_profit_across_all_trades():
+    trades = (make_trade(20.0), make_trade(-10.0), make_trade(5.0))
+    assert metrics.expectancy(trades) == pytest.approx(5.0)
+
+
+def test_expectancy_negative_when_losing_on_average():
+    trades = (make_trade(1.0), make_trade(-10.0))
+    assert metrics.expectancy(trades) == pytest.approx(-4.5)
