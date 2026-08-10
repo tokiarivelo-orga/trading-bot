@@ -263,7 +263,7 @@ schema spot-checked directly.
 
 ## Phase 6 — Regime tagging & walk-forward research
 
-**Status:** Pass A done (`831136a`); Pass B (walk-forward harness) not started
+**Status:** done — Pass A (`831136a`) + Pass B (`0f32b86`)
 
 - Tag every trade and decision with the market regime at entry: ATR
   percentile bucket, trading session, trend/range classification. **[Pass A]**
@@ -320,6 +320,39 @@ that directory, so HEAD has been fresh-checkout-broken since Phase 4,
 invisible only because every session shares one long-lived working tree.
 Fixed separately in `28f4402`, ahead of the Pass A commit.
 
+**Pass B outcome (2026-08-10, `0f32b86`):** This repo's generated strategies
+have fixed parameters and no parameter-sweep infrastructure exists, so
+"walk-forward" here means independent out-of-sample folds via the existing,
+unmodified `run_backtest()` — not classic in-sample-refit optimization,
+since there's nothing to refit; documented explicitly in `walk_forward.py`'s
+own docstring so it's never mistaken for the textbook definition. New
+`backtest/application/period.py::split_into_folds()` divides a period into
+consecutive `fold_months`-sized windows; `walk_forward.py::run_walk_forward()`
+runs each fold independently, skips a fold on missing history rather than
+aborting the whole run, and aggregates mean/stddev/worst-fold PF and
+expectancy — a zero-trade fold reports `profit_factor=None` (undefined),
+never `0.0` (which would read as a loss). New `reports/walk_forward_writer.py`
+writes one aggregate JSON per run to its own `reports/walk_forward/`
+directory, so the existing single-backtest report listing never has to
+handle a differently-shaped file; `reports/writer.py`'s JSON-serialization
+helper is now public (`to_jsonable`) so both writers share it. New
+`POST/GET/DELETE .../backtest/walk-forward/{run,reports}` routes in a
+separate job store from the existing single-run machinery; new
+`walk_forward_cli.py` mirrors the existing single-backtest CLI; new `make
+walk-forward-backtest` target.
+
+Gates: ruff clean on every touched file; `tests/unit/backtest/` — 162
+passed, confirmed mocked throughout (`run_backtest`/`run_walk_forward`
+never actually invoked, so the suite never runs a real ~7-minute backtest);
+OpenAPI spot-check confirms every new route/field is documented per
+CLAUDE.md. A third concurrent session (a deep-learning "SMC" strategy
+effort) is actively editing `run_backtest.py` — left untouched and verified
+byte-identical throughout, treated strictly as a black box. That same
+session had also added its own Makefile targets (`train-dl`,
+`export-dataset`) landing adjacent to this phase's new
+`walk-forward-backtest` target in one diff hunk — excluded from this commit
+by reconstructed content, same treatment as Pass A's shared-file collisions.
+
 ---
 
 ## Progress log
@@ -331,6 +364,9 @@ Fixed separately in `28f4402`, ahead of the Pass A commit.
 | 2026-08-05 | 3 | Done, left uncommitted for review. Gates: ruff clean on every touched path (repo-wide `src tests` still reports the same ~298 pre-existing errors, all in `strategies/generated/xauusd_snd_qm_structure_*` + `test_position_manager.py`/`test_ws.py`); pytest passes apart from the three known pre-existing failures; `make lint-frontend` + `make build-frontend` pass. Note: `alembic upgrade head` had to be run on the dev DB — Phase 1/2's migrations had never been applied either, which is what `tests/unit/test_health.py` was failing on. |
 | 2026-08-05 | 2 | Done, left uncommitted for review. Gates: ruff clean on touched paths (repo-wide ruff has ~300 pre-existing errors, all in `strategies/generated/` + two unrelated test files); pytest passes apart from the three known pre-existing failures below; `make lint-frontend` + `make build-frontend` pass. |
 | 2026-08-06 | 4 | Done, committed `5660aca`. The phase's subagent was killed by a session limit, so the work was audited, finished and gated by the orchestrator instead. Gates: ruff clean on every Phase 4 path (repo-wide `src tests` still reports the same 295 pre-existing errors in `strategies/generated/xauusd_snd_qm_structure_*`, unmodified vs HEAD); pytest 1333 passed, 1 failed — the known `risk.yaml` assertion, down from 2 because this phase fixed the `r_multiple` regression it had introduced; `make lint-frontend` + `make build-frontend` pass. Audit caught the recurring scope creep for the third time: `scalp_bollinger_reversion_v1.yaml` and `scalp_ema_cross_v1.yaml` deleted again, both restored. Committed by explicit path — a concurrent session's in-flight market-data/chart work shares `shared/api/client.ts`, so only this phase's three hunks were staged from it. |
+| 2026-08-07 | 5 | Done, committed `2d3c92b`. Metrics endpoint, signal_id correlation threaded signal→sizing→order→fill→journal, structured JSON log option, log-hygiene pass, silence alerting. Gates: ruff clean on all 40 touched files; pytest 1501 passed, 1 failed (known `risk.yaml` assertion); `/metrics` scrape and OpenAPI schema spot-checked directly. |
+| 2026-08-07 | 6 (Pass A) | Done, committed `831136a` (+ `28f4402`, `ebef05a`). See outcome notes above. |
+| 2026-08-10 | 6 (Pass B) | Done, committed `0f32b86`. See outcome notes above. Phase 6 complete. |
 
 ## Known pre-existing breakage (NOT caused by this plan's work)
 
