@@ -26,9 +26,6 @@ MIN_HISTORY = EMA_SLOW * 2 + ATR_PERIOD + 2  # a couple of EMA_SLOW spans to set
 POINT_VALUES = {
     "XAUUSD": 0.01,
     "XAGUSD": 0.001,
-    "BTCUSD": 0.01,
-    "Boom 1000 Index": 0.0001,
-    "Volatility 75 Index": 0.01,
 }
 
 
@@ -47,7 +44,7 @@ class ScalpEmaCrossV1:
         self.spec = StrategySpec(
             name="scalp_ema_cross_v1",
             version=1,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD", "Boom 1000 Index", "Volatility 75 Index"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=("M1", "H1"),
             params={

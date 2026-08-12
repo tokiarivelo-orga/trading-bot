@@ -207,10 +207,10 @@ class TestRoundVolume:
         assert violation is not None
         assert violation.reason == REASON_VOLUME_ABOVE_MAX
 
-    def test_boom1000_minimum_lot_of_0_2(self) -> None:
-        # Boom 1000 Index's real volume_min is 0.2 — a 0.1-lot request is
-        # refused outright, which is easy to miss on a symbol where every
-        # other instrument accepts 0.01.
+    def test_coarse_minimum_lot_is_rejected(self) -> None:
+        # A synthetic index with a coarser minimum than the forex-sized default
+        # is refused outright, which is easy to miss on such a symbol where
+        # every other instrument accepts 0.01.
         _, violation = round_volume(0.1, volume_min=0.2, volume_max=80.0, volume_step=0.01)
         assert violation is not None
         assert violation.reason == REASON_VOLUME_BELOW_MIN

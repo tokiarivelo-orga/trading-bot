@@ -11,6 +11,7 @@ from src.ai.ports.llm import ProviderSpec
 from src.alerting.domain.models import AlertEventFlags, AlertingConfig, SilenceConfig
 from src.broker.domain.account import AccountConfig
 from src.broker.domain.symbol_config import SymbolTradingConfig
+from src.engine.domain.exit_policy import ExitPolicyConfig, ExitPolicySettings
 from src.engine.domain.models import RiskCaps
 from src.engine.domain.regime import RegimeConfig
 from src.engine.domain.volatility import VolatilityConfig
@@ -81,6 +82,59 @@ def load_volatility_config(configs_dir: Path) -> VolatilityConfig:
         extreme_profit_lock_r_mult=data.get("extreme_profit_lock_r_mult", 0.5),
         chandelier_atr_mult=data.get("chandelier_atr_mult", 2.0),
         chandelier_min_profit_r=data.get("chandelier_min_profit_r", 1.0),
+    )
+
+
+def load_exit_policy_config(configs_dir: Path) -> ExitPolicyConfig:
+    """Give-back exit policy (`configs/exits.yaml`).
+
+    Its own file rather than a section of `volatility.yaml` because it is a
+    different mechanism answering a different measurement — see
+    `engine/domain/exit_policy.py` for the give-back numbers and for why its
+    parameters must not be re-fitted on in-sample results.
+    """
+    data = load_yaml_config("exits", configs_dir)
+    return _exit_policy_from(data, ExitPolicyConfig())
+
+
+def _exit_policy_from(data: dict, base: ExitPolicyConfig) -> ExitPolicyConfig:
+    """One layer of `exits.yaml` over `base`. Used for both the top-level
+    defaults (over the dataclass defaults) and each `per_bot` entry (over the
+    resolved top-level defaults), so an override only has to state what it
+    changes — most say nothing but `enabled: false`."""
+    return ExitPolicyConfig(
+        enabled=data.get("enabled", base.enabled),
+        arm_r=data.get("arm_r", base.arm_r),
+        keep_fraction=data.get("keep_fraction", base.keep_fraction),
+        min_lock_r=data.get("min_lock_r", base.min_lock_r),
+        choch_lock_r=data.get("choch_lock_r", base.choch_lock_r),
+        reduce_tp_enabled=data.get("reduce_tp_enabled", base.reduce_tp_enabled),
+        min_tp_reduction_r=data.get("min_tp_reduction_r", base.min_tp_reduction_r),
+        fixed_target_r=data.get("fixed_target_r", base.fixed_target_r),
+        revert_probability_threshold=data.get(
+            "revert_probability_threshold", base.revert_probability_threshold
+        ),
+        revert_min_peak_r=data.get("revert_min_peak_r", base.revert_min_peak_r),
+    )
+
+
+def load_exit_policy_settings(configs_dir: Path) -> ExitPolicySettings:
+    """`configs/exits.yaml` including its `per_bot:` overrides.
+
+    Per-bot exists because the give-back policy measurably helps some bots
+    and hurts others — it rescues bots that are bleeding and taxes bots that
+    are working (`scripts/eval_giveback_per_bot.py`). Keys are **strategy**
+    names, matching what that script reports.
+    """
+    data = load_yaml_config("exits", configs_dir)
+    default = _exit_policy_from(data, ExitPolicyConfig())
+    per_bot = data.get("per_bot") or {}
+    return ExitPolicySettings(
+        default=default,
+        per_strategy={
+            str(name): _exit_policy_from(overrides or {}, default)
+            for name, overrides in per_bot.items()
+        },
     )
 
 
@@ -185,9 +239,14 @@ def load_maintenance_config(configs_dir: Path) -> MaintenanceConfig:
     data = load_yaml_config("maintenance", configs_dir)
     activity_log = data.get("activity_log", {})
     wal_checkpoint = data.get("wal_checkpoint", {})
+    model_training = data.get("model_training", {})
     return MaintenanceConfig(
         activity_log_retention_days=activity_log.get("retention_days", 90),
         activity_log_check_interval_hours=activity_log.get("check_interval_hours", 6.0),
         wal_checkpoint_enabled=wal_checkpoint.get("enabled", True),
         wal_checkpoint_interval_minutes=wal_checkpoint.get("interval_minutes", 15.0),
+        model_training_enabled=model_training.get("enabled", False),
+        model_training_interval_days=model_training.get("interval_days", 14.0),
+        model_training_on_startup=model_training.get("train_on_startup", False),
+        model_training_symbols=tuple(model_training.get("symbols") or ()),
     )

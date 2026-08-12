@@ -28,6 +28,9 @@ from src.shared.api.dependencies import AccountRuntimeDep
 
 router = APIRouter(prefix="/accounts/{account_id}/journal", tags=["journal"])
 
+from src.journal.api.export import router as export_router
+router.include_router(export_router)
+
 
 def _service(account: AccountRuntimeDep) -> TradeJournalService:
     return account.trade_journal
@@ -102,6 +105,10 @@ def _trade_out(record: TradeRecord) -> TradeRecordOut:
         regime_adx=record.regime_adx,
         regime_session=record.regime_session,
         transaction_cost=record.transaction_cost,
+        mfe=record.mfe,
+        mfe_time=int(record.mfe_time.timestamp()) if record.mfe_time else None,
+        mae=record.mae,
+        mae_time=int(record.mae_time.timestamp()) if record.mae_time else None,
     )
 
 
@@ -215,10 +222,11 @@ async def get_history(
     symbol: str | None = Query(default=None, description="Exact symbol match, e.g. 'XAUUSD'."),
     side: Literal["buy", "sell"] | None = Query(default=None, description="Trade direction."),
     strategy_version: str | None = Query(
-        default=None, description="Exact strategy version match, e.g. 'breakout_v1:v1'."
+        default=None,
+        description="Substring match on strategy version, e.g. 'breakout' or 'breakout_v1:v1'.",
     ),
     skill: str | None = Query(
-        default=None, description="Exact bot skill match, e.g. 'normal/xauusd'."
+        default=None, description="Substring match on bot skill, e.g. 'normal' or 'xauusd'."
     ),
     outcome: Literal["win", "loss", "breakeven", "open"] | None = Query(
         default=None,
@@ -245,7 +253,7 @@ async def get_history(
     limit: int = Query(default=50, ge=1, le=500, description="Page size."),
     offset: int = Query(default=0, ge=0, description="Number of matching trades to skip."),
 ) -> TradeHistoryPage:
-    records, total = await _service(account).search_trades(
+    records, total, total_profit = await _service(account).search_trades(
         symbol=symbol,
         side=side,
         strategy_version=strategy_version,
@@ -260,7 +268,9 @@ async def get_history(
         limit=limit,
         offset=offset,
     )
-    return TradeHistoryPage(items=[_trade_out(r) for r in records], total=total)
+    return TradeHistoryPage(
+        items=[_trade_out(r) for r in records], total=total, total_profit=total_profit
+    )
 
 
 def _symbol_analytics_out(a: SymbolAnalytics) -> SymbolAnalyticsOut:

@@ -148,9 +148,17 @@ class CandleStreamService:
         self._symbols.append(symbol)
         # Was ad-hoc chart-watched — now folded into permanent status, not
         # double-tracked. A later unwatch() from that chart tab no-ops
-        # cleanly (its first line already guards on membership here).
         self._extra_refcounts.pop(symbol, None)
         logger.info("candle stream: symbol %s permanently activated for automated trading", symbol)
+        return True
+
+    def remove_symbol(self, symbol: str) -> bool:
+        """Removes `symbol` from permanent automated trading status. 
+        If it's not in the list, returns False."""
+        if symbol not in self._symbols:
+            return False
+        self._symbols.remove(symbol)
+        logger.info("candle stream: symbol %s permanently deactivated", symbol)
         return True
 
     def unwatch(self, symbol: str) -> None:
@@ -257,21 +265,19 @@ class CandleStreamService:
             # startup-only `CandleHistoryService.reconcile_gaps` never
             # gets a chance to see it either). Heal it here, right at the
             # moment it's detected, before emitting the tail as usual.
-            if self._candle_history is not None and (
-                closed[0].time - previous
-            ).total_seconds() > timeframe.seconds:
+            if (
+                self._candle_history is not None
+                and (closed[0].time - previous).total_seconds() > timeframe.seconds
+            ):
                 logger.warning(
-                    "candle gap detected for %s %s: last seen %s, resumed at %s "
-                    "— backfilling",
+                    "candle gap detected for %s %s: last seen %s, resumed at %s — backfilling",
                     symbol,
                     timeframe.value,
                     previous.isoformat(),
                     closed[0].time.isoformat(),
                 )
                 try:
-                    await self._candle_history.backfill(
-                        symbol, timeframe, 1000, start=previous
-                    )
+                    await self._candle_history.backfill(symbol, timeframe, 1000, start=previous)
                 except MarketDataUnavailable:
                     logger.warning(
                         "candle gap backfill failed for %s %s: gateway unavailable",

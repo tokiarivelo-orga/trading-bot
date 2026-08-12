@@ -1,0 +1,66 @@
+# APEX TURBO D1 — position rung of the turbo ladder. NOT VALIDATED.
+#
+# `xauusd_snd_apex_trendguard_d1`: triggers on the daily close, zones on D1,
+# higher-timeframe zones on W1, trend votes on H4 + D1. Overrides are
+# byte-identical to `xauusd_apex_turbo_m1`'s (see that file for what each
+# one does).
+#
+# Read this before enabling it — three things are genuinely different at
+# the top of the ladder, and the last one is a warning, not a caveat:
+#
+#   * `zone_timeframe` equals the entry timeframe. Every finer sibling
+#     draws zones one rung up and triggers on a smaller candle; above D1
+#     there is no smaller candle, so the daily bar both forms the zone and
+#     carries the rejection close. Still no look-ahead — a zone is only
+#     usable from the bar after its leg-out completes.
+#   * the trend ladder is two votes (H4 1.0 + D1 2.0) and
+#     `trend_min_score` rises to 2.5, so the daily vote alone cannot carry
+#     a trade — H4 has to agree. W1 is deliberately not a vote: a backtest
+#     pre-loads ~8 W1 bars, so it would read differently in a replay than
+#     live. It is used only as the higher-timeframe *zone* frame, where an
+#     empty list costs a confluence bonus and nothing else.
+#   * **the sample is 20 trades.** The candle store's M5 history starts
+#     2026-02-17, and the backtest harness derives bid/ask from M5 bars on
+#     every timeframe, so no Apex backtest can currently run before then —
+#     even though D1 candles go back to 2011. A daily bot gets ~110 bars
+#     out of that window. Backfill M5 (or H1 + M5) history further back
+#     before treating any number below as evidence.
+#
+# ── Measured: XAUUSD 2026-03..2026-08, real engine, broker realism on,
+#    $10,000 start, backtest risk ──
+#
+#            trades    PF   max DD   end balance   long/short
+#   turbo        20  7.15    1.11%       $10,683         4/16
+#   base         10   inf    0.00%       $10,416         0/10
+#
+# One position every ~5 trading days. 14 of the 20 closes are ~+0.20R
+# secure-base trailing scratches, 4 are real take-profits, 2 are losses —
+# the highest real-target share in the family (avg R 0.277 against the M1
+# flagship's 0.20), which is what you would expect when targets are days
+# wide rather than minutes. But at n=20 that is an observation, not a
+# result: a base configuration with zero losing trades and an infinite
+# profit factor is a sample-size artifact, full stop.
+#
+# Gold fell 5,387 -> 4,051 over the window, the book is 80% short, and the
+# 4 longs lost -$88.77. The long side is untested here.
+#
+# Recommendation: paper-trade this one. It is included so the turbo family
+# covers the whole ladder, not because it has earned live risk.
+name: normal/xauusd/xauusd_apex_turbo_d1
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_d1
+risk_multiplier: 1.0
+sessions: []
+param_overrides:
+  confirm_mode: "off"
+  max_signals_per_bar: 2
+  max_touch_episode: 20
+  max_entry_depth: 1.00
+  zone_height_atr_min: 0.20
+  zone_height_atr_max: 2.40
+  min_impulse_atr: 0.55
+  allow_counter_trend: true
+  zri_min: 0.35
+  neutral_min_score: 0.0
+  tp2_min_rr: 1.8
+htf_veto_override: null

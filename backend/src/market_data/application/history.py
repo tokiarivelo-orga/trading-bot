@@ -10,6 +10,13 @@ from datetime import UTC, datetime, timedelta
 from src.market_data.adapters.candle_repository import CandleRepository
 from src.market_data.adapters.replay import SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
+from src.market_data.domain.gaps import (
+    CandleGap,
+    GapRepairReport,
+    bars_between,
+    find_gaps,
+    is_weekend_closure,
+)
 from src.market_data.domain.models import Candle, MarketDataUnavailable, Timeframe
 from src.market_data.ports.market_data import MarketDataPort
 
@@ -19,6 +26,29 @@ logger = logging.getLogger(__name__)
 # weekend/holiday session closure (Friday close to Sunday/Monday reopen,
 # plus slack for holidays) rather than a hole left by a gateway/DB outage.
 _MAX_SESSION_GAP = timedelta(days=3)
+
+# Bounds `repair_gaps`'s per-gap backward paging the same way `backfill`'s
+# 2000-page cap bounds its own loop: a hole wider than this many pages of
+# `count` bars isn't a stream outage, it's history that was never downloaded
+# at all — `POST /market-data/backfill` is the tool for that.
+_MAX_REPAIR_PAGES = 20
+
+# `scan_gaps` only reports a hole at the very start/end of the scanned range
+# once it's at least this many bars wide: the stored history legitimately
+# trails the live stream by a bar or two (the forming bar is persisted on the
+# stream's own ~1/minute cadence), and flagging that as damage would leave a
+# permanent "gaps found" badge on every healthy chart.
+_EDGE_GAP_TOLERANCE_BARS = 2
+
+
+def _gap(timeframe: Timeframe, start: datetime, end: datetime) -> CandleGap:
+    """A range-edge gap — `find_gaps` builds the ones *between* stored bars."""
+    return CandleGap(
+        start=start,
+        end=end,
+        missing_bars=bars_between(timeframe, start, end),
+        weekend=is_weekend_closure(timeframe, start, end),
+    )
 
 
 def _has_internal_gap(candles: list[Candle], timeframe: Timeframe) -> bool:
@@ -134,6 +164,139 @@ class CandleHistoryService:
         )
         return total
 
+    async def scan_gaps(
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
+    ) -> list[CandleGap]:
+        """Holes in *stored* history for bar opens in `[start, end]` — the
+        chart's currently loaded window, or any range a backtest is about to
+        replay. See `domain/gaps.py` for why these matter: a hole is invisible
+        to `get_latest`/`get_before` (and therefore to the chart, which draws
+        straight across it), yet every indicator, zone detector and backtest
+        computed over that window silently treats bars that are hours or days
+        apart as adjacent.
+
+        Reports the range's leading/trailing edges too, not just holes between
+        stored bars, so a window with no local history at all comes back as
+        one repairable gap instead of a misleading "no gaps". Both edges get a
+        2-bar tolerance, since the DB legitimately trails the live stream by a
+        bar or so. W1/MN are skipped — see `find_gaps`."""
+        if self._repository is None or timeframe in (Timeframe.W1, Timeframe.MN):
+            return []
+        stored = await asyncio.to_thread(
+            self._repository.get_range,
+            symbol,
+            timeframe,
+            start,
+            end + timedelta(seconds=1),  # get_range's `end` is exclusive
+            self._account_id,
+        )
+        if not stored:
+            missing = bars_between(timeframe, start, end)
+            if missing < _EDGE_GAP_TOLERANCE_BARS:
+                return []
+            return [_gap(timeframe, start, end)]
+        gaps = find_gaps(stored, timeframe)
+        if bars_between(timeframe, start, stored[0].time) >= _EDGE_GAP_TOLERANCE_BARS:
+            gaps.insert(0, _gap(timeframe, start, stored[0].time))
+        trailing_start = timeframe.close_of(stored[-1].time)
+        if bars_between(timeframe, trailing_start, end) >= _EDGE_GAP_TOLERANCE_BARS:
+            gaps.append(_gap(timeframe, trailing_start, end))
+        return gaps
+
+    async def repair_gaps(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+        count: int = 1000,
+        include_weekend: bool = False,
+    ) -> GapRepairReport:
+        """Re-download every hole `scan_gaps` finds in `[start, end]` and
+        persist it, then rescan so the caller learns which holes actually
+        closed. This is the "the chart has a hole in it" button's backend: the
+        gateway is asked only for the missing stretches (one backward-paged
+        request per hole via the `before` cursor, `_MAX_REPAIR_PAGES` deep),
+        not for the whole window, so repairing a 40-bar hole inside a
+        60k-bar session-replay range costs one call rather than a dozen.
+
+        Weekend closures are skipped by default — the broker was never going
+        to have those bars, and asking wastes a Wine/MT5 round trip per hole.
+        Pass `include_weekend` to ask anyway (some synthetic/crypto symbols do
+        trade through the weekend, and their "weekend" holes are real).
+
+        Whatever `scan_gaps` still reports afterwards is in
+        `GapRepairReport.remaining`: the broker itself has no bars there, so
+        it's a genuine closure (holiday, halt, symbol listed later), not a
+        hole in our copy — callers should say so rather than invite a retry.
+        Raises `MarketDataUnavailable` if the gateway is unreachable."""
+        found = await self.scan_gaps(symbol, timeframe, start, end)
+        targets = [gap for gap in found if include_weekend or not gap.weekend]
+        downloaded = 0
+        for gap in targets:
+            downloaded += await self._download_between(symbol, timeframe, gap.start, gap.end, count)
+        rescanned = await self.scan_gaps(symbol, timeframe, start, end) if targets else found
+        remaining = [gap for gap in rescanned if include_weekend or not gap.weekend]
+        repaired = [
+            gap
+            for gap in targets
+            if not any(left.start < gap.end and gap.start < left.end for left in remaining)
+        ]
+        # Counted in bars, not holes, and against the gaps actually targeted
+        # (weekend closures are in `found` but were never asked for). A hole
+        # that merely shrank still recovered real bars — an outage running
+        # into the broker's nightly break gives back its trading hours and
+        # keeps the closure, which `repaired` alone would report as nothing
+        # gained.
+        recovered = max(
+            sum(gap.missing_bars for gap in targets) - sum(gap.missing_bars for gap in remaining),
+            0,
+        )
+        logger.info(
+            "gap repair %s %s [%s..%s]: %s found, %s closed, %s remaining, "
+            "%s bars recovered from %s downloaded",
+            symbol,
+            timeframe.value,
+            start,
+            end,
+            len(found),
+            len(repaired),
+            len(remaining),
+            recovered,
+            downloaded,
+        )
+        return GapRepairReport(
+            symbol=symbol,
+            timeframe=timeframe,
+            start=start,
+            end=end,
+            found=found,
+            repaired=repaired,
+            remaining=remaining,
+            bars_downloaded=downloaded,
+            bars_recovered=recovered,
+        )
+
+    async def _download_between(
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime, count: int
+    ) -> int:
+        """Page backward from `end` until the fetched bars reach `start` (or
+        the broker's history runs out), persisting each page. Same `before`
+        cursor contract as `backfill`; the overlap either side of the hole is
+        deliberate and harmless — `upsert_many` overwrites in place."""
+        total = 0
+        before: datetime | None = end
+        for _ in range(_MAX_REPAIR_PAGES):
+            page = await self._market_data.get_candles(symbol, timeframe, count, before)
+            if not page:
+                break
+            total += await asyncio.to_thread(self._repository.upsert_many, page, self._account_id)
+            oldest = page[0].time
+            if oldest <= start or len(page) < count:
+                break
+            before = oldest
+        return total
+
     async def reconcile_gaps(
         self,
         symbols: list[str],
@@ -208,7 +371,5 @@ class CandleHistoryService:
             volume_max=info.volume_max,
             volume_step=info.volume_step,
         )
-        await asyncio.to_thread(
-            self._symbol_spec_repository.upsert, symbol, spec, self._account_id
-        )
+        await asyncio.to_thread(self._symbol_spec_repository.upsert, symbol, spec, self._account_id)
         logger.info("synced symbol spec for %s", symbol)

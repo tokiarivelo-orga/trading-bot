@@ -83,10 +83,56 @@ class Signal:
     indicators: tuple[IndicatorReading, ...] = field(default_factory=tuple)
 
 
+class ExitActionKind(StrEnum):
+    # Closes this bot's own open position outright — for thesis
+    # invalidation (e.g. the zone/FVG the entry was built on just got
+    # violated). Distinct from `PositionManager`'s generic give-back/
+    # volatility exits, which react to realised profit state, not setup
+    # knowledge only the strategy has.
+    CLOSE = "close"
+    # Moves this bot's own open position's SL to its entry price, subject
+    # to the engine's usual never-loosen guard — for setup-specific
+    # continuation confirmation, not a substitute for the generic +1R
+    # breakeven rule `PositionManager` already runs for every position.
+    BREAKEVEN = "breakeven"
+
+
+@dataclass(frozen=True)
+class ExitDecision:
+    """A strategy's request to act on its OWN already-open position —
+    returned from `evaluate()` alongside/instead of a `Signal`. Matched to
+    a position by the engine via magic number, the same way
+    `close_on_opposite_signal` is; see `Strategy.evaluate`."""
+
+    action: ExitActionKind
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class PositionSnapshot:
+    """What a strategy is allowed to see about its own open position on
+    this symbol, populated by the engine into `MarketContext.own_position`
+    before `evaluate()` runs. `None` when the bot has no open position on
+    this symbol. Deliberately narrow — no ticket/broker fields — since a
+    strategy has no business addressing the broker directly; it only ever
+    expresses intent via `ExitDecision`."""
+
+    direction: Direction
+    entry_price: float
+    sl: float | None
+    tp: float | None
+    opened_at: datetime
+
+
 @dataclass(frozen=True)
 class StrategySpec:
     name: str
     version: int
+    # The set of broker symbol names this strategy is designed for.
+    # An empty tuple means the strategy accepts *any* symbol — used when
+    # symbols are configured dynamically at runtime rather than hard-coded
+    # at codegen time. A non-empty tuple acts as an explicit allowlist:
+    # the engine and backtest runner will skip/reject any symbol not in it.
     symbols: tuple[str, ...]
     entry_timeframe: str  # the bar size this strategy evaluates on, e.g. "M1", "M5"
     confirmation_timeframes: tuple[str, ...]
@@ -116,11 +162,24 @@ class MarketContext:
     symbol: str
     candles: dict[str, Any]
     spread_points: float
+    # This bot's own open position on `symbol`, if any — see
+    # `PositionSnapshot`. `None` for every existing strategy's context until
+    # the engine is told to populate it (opt-in via reading it at all;
+    # strategies that never look at this field behave exactly as before).
+    own_position: PositionSnapshot | None = None
 
 
 @runtime_checkable
 class Strategy(Protocol):
     spec: StrategySpec
 
-    def evaluate(self, ctx: MarketContext) -> Signal | tuple[Signal, ...] | list[Signal] | None: ...
+    def evaluate(
+        self, ctx: MarketContext
+    ) -> (
+        Signal
+        | ExitDecision
+        | tuple[Signal | ExitDecision, ...]
+        | list[Signal | ExitDecision]
+        | None
+    ): ...
 

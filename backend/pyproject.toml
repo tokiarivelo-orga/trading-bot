@@ -2,7 +2,7 @@
 name = "trading-bot-backend"
 version = "0.1.0"
 description = "AI trading bot backend — engine, strategies, AI layer, journal"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
@@ -16,13 +16,15 @@ dependencies = [
     "cryptography>=49.0.0",
     "keyring>=25.7.0",
     "python-socketio>=5.16.3",
-    "pandas>=3.0.3",
-    "numpy>=2.5.1",
+    "pandas>=2.0.0",
+    "numpy>=1.26.0",
     "anthropic>=0.116.0",
     "pymupdf>=1.28.0",
     "jinja2>=3.1.6",
     "python-multipart>=0.0.32",
     "prometheus-client>=0.26.0",
+    "scikit-learn>=1.9.0",
+    "torch>=2.13.0",
 ]
 
 [dependency-groups]

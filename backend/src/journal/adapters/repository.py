@@ -132,7 +132,9 @@ class JournalRepository:
             TradeRow.execution_latency_ms,
             TradeRow.broker_retcode,
             TradeRow.mfe,
+            TradeRow.mfe_time,
             TradeRow.mae,
+            TradeRow.mae_time,
             TradeRow.regime_volatility,
             TradeRow.regime_trend,
             TradeRow.regime_session,
@@ -160,7 +162,9 @@ class JournalRepository:
                 execution_latency_ms=row.execution_latency_ms,
                 broker_retcode=row.broker_retcode,
                 mfe=row.mfe,
+                mfe_time=datetime.fromtimestamp(row.mfe_time, tz=UTC) if row.mfe_time else None,
                 mae=row.mae,
+                mae_time=datetime.fromtimestamp(row.mae_time, tz=UTC) if row.mae_time else None,
                 regime_volatility=row.regime_volatility,
                 regime_trend=row.regime_trend,
                 regime_session=row.regime_session,
@@ -190,7 +194,7 @@ class JournalRepository:
         accumulator reads (Phase 3). Runs once per closed candle per symbol,
         hence the narrow column list rather than `get_open`'s full rows."""
         query = select(
-            TradeRow.id, TradeRow.side, TradeRow.open_price, TradeRow.mfe, TradeRow.mae
+            TradeRow.id, TradeRow.side, TradeRow.open_price, TradeRow.mfe, TradeRow.mfe_time, TradeRow.mae, TradeRow.mae_time
         ).where(
             TradeRow.close_time.is_(None),
             TradeRow.symbol == symbol,
@@ -200,13 +204,13 @@ class JournalRepository:
             rows = session.execute(query).all()
         return [
             OpenTradeExcursion(
-                id=row.id, side=row.side, open_price=row.open_price, mfe=row.mfe, mae=row.mae
+                id=row.id, side=row.side, open_price=row.open_price, mfe=row.mfe, mfe_time=datetime.fromtimestamp(row.mfe_time, tz=UTC) if row.mfe_time else None, mae=row.mae, mae_time=datetime.fromtimestamp(row.mae_time, tz=UTC) if row.mae_time else None
             )
             for row in rows
         ]
 
     def update_excursion(
-        self, trade_id: str, mfe: float, mae: float, account_id: str = "default"
+        self, trade_id: str, mfe: float, mae: float, mfe_time: datetime | None, mae_time: datetime | None, account_id: str = "default"
     ) -> None:
         """Writes just the two excursion columns of one trade.
 
@@ -219,7 +223,7 @@ class JournalRepository:
             session.execute(
                 update(TradeRow)
                 .where(TradeRow.id == trade_id, TradeRow.account_id == account_id)
-                .values(mfe=mfe, mae=mae)
+                .values(mfe=mfe, mae=mae, mfe_time=int(mfe_time.timestamp()) if mfe_time else None, mae_time=int(mae_time.timestamp()) if mae_time else None)
             )
             session.commit()
 
@@ -279,7 +283,7 @@ class JournalRepository:
         limit: int = 50,
         offset: int = 0,
         account_id: str = "default",
-    ) -> tuple[list[TradeRecord], int]:
+    ) -> tuple[list[TradeRecord], int, float]:
         """Filterable, paginated trade history query (any symbol, any field
         combination) — backs `GET /journal/history`."""
         filters: list[ColumnElement] = [TradeRow.account_id == account_id]
@@ -288,9 +292,9 @@ class JournalRepository:
         if side is not None:
             filters.append(TradeRow.side == side)
         if strategy_version is not None:
-            filters.append(TradeRow.strategy_version == strategy_version)
+            filters.append(TradeRow.strategy_version.contains(strategy_version))
         if skill is not None:
-            filters.append(TradeRow.skill == skill)
+            filters.append(TradeRow.skill.contains(skill))
         if outcome == "open":
             filters.append(TradeRow.close_time.is_(None))
         elif outcome == "win":
@@ -308,16 +312,20 @@ class JournalRepository:
         if close_to is not None:
             filters.append(TradeRow.close_time <= close_to)
 
-        count_query = select(func.count()).select_from(TradeRow).where(*filters)
+        count_query = (
+            select(func.count(), func.sum(TradeRow.profit)).select_from(TradeRow).where(*filters)
+        )
         order_column = _ORDER_COLUMNS[order_by]
         order_clause = order_column.desc() if order_dir == "desc" else order_column.asc()
         page_query = (
             select(TradeRow).where(*filters).order_by(order_clause).limit(limit).offset(offset)
         )
         with self._session_factory() as session:
-            total = session.scalar(count_query) or 0
+            res = session.execute(count_query).first()
+            total = res[0] or 0 if res else 0
+            total_profit = float(res[1] or 0.0) if res else 0.0
             rows = session.scalars(page_query).all()
-        return [_to_domain(row) for row in rows], total
+        return [_to_domain(row) for row in rows], total, total_profit
 
 
 def _snapshot_to_json(snapshot: tuple[CandleSnapshot, ...]) -> list[dict]:
@@ -431,7 +439,9 @@ def _to_row(record: TradeRecord, account_id: str) -> TradeRow:
         execution_latency_ms=record.execution_latency_ms,
         broker_retcode=record.broker_retcode,
         mfe=record.mfe,
+        mfe_time=int(record.mfe_time.timestamp()) if record.mfe_time else None,
         mae=record.mae,
+        mae_time=int(record.mae_time.timestamp()) if record.mae_time else None,
         regime_volatility=record.regime_volatility,
         regime_volatility_percentile=record.regime_volatility_percentile,
         regime_trend=record.regime_trend,
@@ -483,7 +493,9 @@ def _to_domain(row: TradeRow) -> TradeRecord:
         execution_latency_ms=row.execution_latency_ms,
         broker_retcode=row.broker_retcode,
         mfe=row.mfe,
+        mfe_time=datetime.fromtimestamp(row.mfe_time, tz=UTC) if row.mfe_time else None,
         mae=row.mae,
+        mae_time=datetime.fromtimestamp(row.mae_time, tz=UTC) if row.mae_time else None,
         regime_volatility=row.regime_volatility,
         regime_volatility_percentile=row.regime_volatility_percentile,
         regime_trend=row.regime_trend,

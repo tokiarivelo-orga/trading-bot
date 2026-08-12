@@ -52,6 +52,7 @@ from src.shared.metrics.registry import REGISTRY, set_open_positions, set_ws_cli
 from src.skills.api.routes import router as skills_router
 from src.strategies.api.routes import router as strategies_router
 from src.strategies.api.routes import sandbox_router as strategies_sandbox_router
+from src.strategies.api.routes_training import router as model_training_router
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,17 @@ OPENAPI_TAGS = [
         "Ollama, OpenClaw) for document analysis, strategy generation, and trade-review/"
         "refinement. Changes apply without a backend restart — see the `ai` tag for the "
         "tasks themselves.",
+    },
+    {
+        "name": "model-training",
+        "description": "Trigger and inspect deep-learning model training (`/model-training/...`). "
+        "Process-wide and unprefixed by account, like `backtest` and `indicators`: there is one "
+        "set of weights in `data/ml_models/` shared by every account. `POST /model-training/runs` "
+        "launches `scripts/train_smc_dl_v2.py` as a background subprocess — it overwrites that "
+        "symbol's weights/scaler/metadata and nothing else, never activating a strategy, touching "
+        "a position, or reading a risk cap. The read endpoints expose each model's walk-forward "
+        "**out-of-sample** numbers, not just its existence, because a model with a large "
+        "in-sample/out-of-sample gap must not be switched on.",
     },
     {
         "name": "strategies",
@@ -271,7 +283,13 @@ async def lifespan(app: FastAPI):
     container.news_window_service.start()
     container.activity_log_retention_service.start()
     container.wal_checkpoint_service.start()
+    # One shared training service for the API button and the bi-weekly
+    # scheduler — `routes_training` reads it off app.state.
+    app.state.model_training = container.model_training
+    container.training_scheduler.start()
     yield
+    await container.training_scheduler.stop()
+    await container.model_training.stop()
     await container.aclose()
     if log_listener is not None:
         log_listener.stop()
@@ -302,6 +320,7 @@ app.include_router(ai_regeneration_router, dependencies=_SESSION_REQUIRED)
 app.include_router(ai_settings_router, dependencies=_SESSION_REQUIRED)
 app.include_router(strategies_router, dependencies=_SESSION_REQUIRED)
 app.include_router(strategies_sandbox_router, dependencies=_SESSION_REQUIRED)
+app.include_router(model_training_router, dependencies=_SESSION_REQUIRED)
 app.include_router(indicators_router, dependencies=_SESSION_REQUIRED)
 app.include_router(skills_router, dependencies=_SESSION_REQUIRED)
 app.include_router(news_router, dependencies=_SESSION_REQUIRED)

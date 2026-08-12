@@ -1,0 +1,7 @@
+name: normal/xauusd/xauusd_snd_qm_structure_adaptive_m5
+symbol: XAUUSD
+strategy: xauusd_snd_qm_structure_adaptive_m5
+risk_multiplier: 1.0
+sessions: []
+param_overrides: {}
+htf_veto_override: null

@@ -205,6 +205,76 @@ export const getCandles = (
   return api.get<Candle[]>(acctPath(accountId, `/market-data/candles?${params}`), signal);
 };
 
+/** One stretch of bars missing from stored candle history. The chart draws
+ * straight across a hole like this, and every indicator, zone detector and
+ * backtest over the window treats the bars either side as adjacent when they
+ * can be hours apart — see GET /market-data/candle-gaps. */
+export interface CandleGap {
+  start: number; // open time the first missing bar would have had, epoch seconds
+  end: number; // open time of the first bar present after the hole
+  missing_bars: number;
+  /** Hole that fits inside a normal weekend closure — expected, not damage.
+   * `repairCandleGaps` skips these unless `include_weekend` is set. */
+  weekend: boolean;
+}
+
+export interface CandleGapScan {
+  symbol: string;
+  timeframe: Candle["timeframe"];
+  start: number;
+  end: number;
+  gaps: CandleGap[];
+  missing_bars: number;
+}
+
+/** Read-only scan of stored history for `[start, end]` (epoch seconds, both
+ * inclusive) — typically the chart's currently loaded window. */
+export const getCandleGaps = (
+  accountId: string,
+  symbol: string,
+  timeframe: Candle["timeframe"],
+  start: number,
+  end: number,
+  signal?: AbortSignal,
+) => {
+  const params = new URLSearchParams({
+    symbol,
+    timeframe,
+    start: String(start),
+    end: String(end),
+  });
+  return api.get<CandleGapScan>(
+    acctPath(accountId, `/market-data/candle-gaps?${params}`),
+    signal,
+  );
+};
+
+export interface GapRepairResult {
+  symbol: string;
+  timeframe: Candle["timeframe"];
+  found: CandleGap[];
+  repaired: CandleGap[];
+  /** Holes the broker itself cannot fill (holiday, halt, symbol listed
+   * later) — retrying will not change them. */
+  remaining: CandleGap[];
+  bars_downloaded: number;
+  bars_recovered: number;
+}
+
+/** Re-downloads every hole in `[start, end]` from the broker and reports
+ * which ones actually closed. Safe to call repeatedly — bars are overwritten
+ * in place, never duplicated. */
+export const repairCandleGaps = (
+  accountId: string,
+  body: {
+    symbol: string;
+    timeframe: Candle["timeframe"];
+    start: string; // ISO 8601, inclusive
+    end: string; // ISO 8601, inclusive
+    include_weekend?: boolean;
+  },
+) => api.post<GapRepairResult>(acctPath(accountId, "/market-data/candle-gaps/repair"), body);
+
 export interface SymbolInfo {
   symbol: string;
   bid: number;
@@ -314,11 +384,16 @@ export interface TradeHistoryItem {
   /** Confluence-check readings behind the bot's entry vote — RSI/ADX/EMA/Volume
    * for the bots that report it. Empty otherwise. */
   indicators: IndicatorReading[];
+  mfe: number | null;
+  mfe_time: number | null; // epoch seconds UTC
+  mae: number | null;
+  mae_time: number | null; // epoch seconds UTC
 }
 
 export interface TradeHistoryPage {
   items: TradeHistoryItem[];
   total: number; // count matching the filters, before limit/offset
+  total_profit?: number; // total realized profit matching the filters, across all pages
 }
 
 export type TradeOutcome = "win" | "loss" | "breakeven" | "open";

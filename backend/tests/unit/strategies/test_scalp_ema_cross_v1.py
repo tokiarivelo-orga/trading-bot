@@ -53,15 +53,9 @@ def test_no_signal_with_insufficient_history():
     assert ScalpEmaCrossV1().evaluate(make_ctx(closes)) is None
 
 
-def test_spec_covers_all_five_symbols_and_m5_entry():
+def test_spec_covers_base_symbols_and_m5_entry():
     spec = ScalpEmaCrossV1().spec
-    assert set(spec.symbols) == {
-        "XAUUSD",
-        "XAGUSD",
-        "BTCUSD",
-        "Boom 1000 Index",
-        "Volatility 75 Index",
-    }
+    assert spec.symbols == ()  # empty = accepts all dynamically configured symbols
     assert spec.entry_timeframe == "M5"
     assert spec.confirmation_timeframes == ("M1", "H1")
     assert spec.params["ema_fast"] == 5

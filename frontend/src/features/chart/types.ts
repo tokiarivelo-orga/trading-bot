@@ -32,6 +32,7 @@ export type ManualIndicatorType =
   | 'snd_v2'
   | 'base'
   | 'patterns'
+  | 'smc'
   | 'custom';
 
 export type IndicatorLineStyle = 'solid' | 'dashed' | 'dotted';
@@ -71,6 +72,8 @@ export interface ManualIndicator {
    * (oscillators get their own bottom pane, everything else goes to main),
    * preserving where already-persisted indicators render. */
   paneTarget?: 'main' | { paneKey: string };
+  /** If true, the indicator is temporarily hidden from the chart but remains in the list. */
+  hidden?: boolean;
 }
 
 export type DrawingToolType =
@@ -97,7 +100,7 @@ export type DrawingToolType =
  * per-trade backend zone) and cleared on the same rebuild cycle as the
  * drawings themselves, so it never outlives the rectangle it describes. */
 export interface ZoneMeta {
-  indicator: 'qml' | 'snd' | 'snd_v2' | 'trade_zone';
+  indicator: 'qml' | 'snd' | 'snd_v2' | 'trade_zone' | 'smc';
   indicatorLabel: string;
   /** Zone subtype, e.g. "RBR"/"DBD"/"RBD"/"DBR"/"QML"/"QML_INV"/"DZ"/"SZ" —
    * null when the source (an older backend report/trade) didn't report one. */
@@ -273,6 +276,8 @@ export interface ZoneColorStyle {
   qml: ZoneIndicatorColors;
   snd: ZoneIndicatorColors;
   sndV2: ZoneIndicatorColors;
+  smc: ZoneIndicatorColors;
+  fvg: ZoneIndicatorColors;
   // The per-trade backend zone has no fresh/touched state of its own — a
   // trade was, by definition, taken from it — so no `touchedColor`.
   tradeZone: Omit<ZoneIndicatorColors, 'touchedColor'>;
@@ -359,6 +364,12 @@ export interface ChartRenderController {
    * and schedules an indicator recompute — a real, stable-identity function
    * replacing the old `renderRef.current()` mutable-ref-assignment hack. */
   paintUpTo(): void;
+  /** Re-fetches the currently loaded time window from the backend and swaps
+   * it in, preserving the visible time range and the replay cursor's position
+   * in time. For when the loaded bars are wrong rather than merely
+   * incomplete — after `useCandleGaps` repairs missing history, the window
+   * spans the same period but gains bars in the middle. */
+  reloadWindow(): Promise<void>;
   symbolInfo: SymbolInfo | null;
   spreadPoints: number | null;
   error: string | null;
@@ -387,4 +398,21 @@ export interface ReplayRevealEvent {
   kind: 'buy' | 'sell' | 'exit' | 'rejected';
   /** Short all-caps text, e.g. "BUY HERE". */
   label: string;
+}
+
+/** Outcome of one "Fill gaps" run, shown transiently on the toolbar — see
+ * `useCandleGaps`. */
+export interface GapRepairSummary {
+  /** Bars that were missing and are stored now. Counted in bars rather than
+   * holes because a hole often only shrinks — an outage that ran into the
+   * broker's nightly break gives back its trading-hours bars and keeps the
+   * closure, which a "holes closed" count would report as nothing gained. */
+  barsRecovered: number;
+  /** Holes the broker itself could not fill (holiday, halt, symbol listed
+   * later). Real market closures, so the UI says so rather than inviting
+   * another click. */
+  remaining: number;
+  /** Set instead of the counts when the repair request itself failed (the
+   * gateway is down, MT5 not logged in). */
+  error: string | null;
 }

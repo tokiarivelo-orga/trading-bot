@@ -6,7 +6,7 @@ name: fomc
 activation:
   calendar_event: ["FOMC Statement", "FOMC Press Conference"]
   window: { before_min: 30, after_min: 90 }
-  symbols: [XAUUSD, XAGUSD, BTCUSD]
+  symbols: []  # empty = applies to all active symbols
 rules:
   pre_event: { close_all: true, block_new_entries: true }
   post_event:

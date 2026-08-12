@@ -48,3 +48,19 @@ def add_symbol_to_app_config(symbol: str, configs_dir: Path) -> bool:
     new_text = text[: match.start()] + new_line + text[match.end() :]
     atomic_write_text(path, new_text)
     return True
+
+def remove_symbol_from_app_config(symbol: str, configs_dir: Path) -> bool:
+    """Removes `symbol` from app.yaml's `symbols:` list if it is there."""
+    path = configs_dir / "app.yaml"
+    text = path.read_text()
+    match = _SYMBOLS_LINE.search(text)
+    if match is None:
+        raise RuntimeError(f"{path} has no single-line `symbols: [...]` list to update")
+    current: list[str] = yaml.safe_load(match.group(0))["symbols"]
+    if symbol not in current:
+        return False
+    updated = [s for s in current if s != symbol]
+    new_line = "symbols: " + yaml.safe_dump(updated, default_flow_style=True).strip()
+    new_text = text[: match.start()] + new_line + text[match.end() :]
+    atomic_write_text(path, new_text)
+    return True

@@ -55,7 +55,7 @@ from src.activity.domain.models import BotSignal, LogEntry
 #    strategy=breakout_v1 skill=normal/xauusd/breakout_v1 — <reason>"
 # Both the "@ <price>" and the "(N target position(s))" segments are optional
 # so legacy lines already persisted in `activity_logs` still parse.
-# Symbol and skill both may contain spaces ("Volatility 75 Index",
+# Symbol and skill both may contain spaces (e.g. "Volatility 75 Index",
 # "normal/volatility 75 index/..."), so neither can be matched with \S+ —
 # anchor on the literal " via strategy=" / " — " delimiters instead.
 _SIGNAL_RE = re.compile(

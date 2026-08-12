@@ -199,6 +199,8 @@ const DEFAULT_ZONE_COLOR_STYLE: ZoneColorStyle = {
   qml: { demandColor: '#42a5f5', supplyColor: '#ff9800', touchedColor: '#787b86' },
   snd: { demandColor: '#42a5f5', supplyColor: '#ff9800', touchedColor: '#787b86' },
   sndV2: { demandColor: '#42a5f5', supplyColor: '#ff9800', touchedColor: '#787b86' },
+  smc: { demandColor: '#42a5f5', supplyColor: '#ff9800', touchedColor: '#787b86' },
+  fvg: { demandColor: '#8a2be2', supplyColor: '#8a2be2', touchedColor: '#787b86' },
   tradeZone: { demandColor: '#42a5f5', supplyColor: '#ff9800' },
 };
 
@@ -213,6 +215,8 @@ export function loadZoneColorStyle(): ZoneColorStyle {
       qml: { ...DEFAULT_ZONE_COLOR_STYLE.qml, ...parsed.qml },
       snd: { ...DEFAULT_ZONE_COLOR_STYLE.snd, ...parsed.snd },
       sndV2: { ...DEFAULT_ZONE_COLOR_STYLE.sndV2, ...parsed.sndV2 },
+      smc: { ...DEFAULT_ZONE_COLOR_STYLE.smc, ...parsed.smc },
+      fvg: { ...DEFAULT_ZONE_COLOR_STYLE.fvg, ...parsed.fvg },
       tradeZone: { ...DEFAULT_ZONE_COLOR_STYLE.tradeZone, ...parsed.tradeZone },
     };
   } catch {

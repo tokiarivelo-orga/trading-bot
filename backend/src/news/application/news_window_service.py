@@ -109,7 +109,7 @@ class NewsWindowService:
         now = now or datetime.now(UTC)
         for window in self.active_windows(now):
             spec = self._window_specs.get(window.skill)
-            if spec is not None and symbol in spec.symbols:
+            if spec is not None and (not spec.symbols or symbol in spec.symbols):
                 return window
         return None
 

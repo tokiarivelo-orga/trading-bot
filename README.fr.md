@@ -55,8 +55,20 @@ tourne avec Python 3.12 Windows sous Wine.
 make check             # lint (ruff + oxlint) + tests backend + build frontend
 ```
 
-Portes individuelles : `make lint`, `make test`, `make build-frontend` — voir
+Individuels : `make lint`, `make test`, `make build-frontend` — voir
 `make help`.
+
+## Intelligence Artificielle & Deep Learning (SMC)
+
+Le projet intègre un réseau de neurones multicouche qui apprend les concepts de la Smart Money (Order Blocks, FVG) de façon autonome. La documentation complète de son architecture est disponible dans [`docs/SMC_DEEP_LEARNING.md`](docs/SMC_DEEP_LEARNING.md).
+
+**Pour déclencher l'entraînement du modèle IA :**
+```bash
+make train-dl          # Extrait les données de MT5, entraîne le réseau, et lance le backtest de validation
+```
+
+**Pour visualiser les décisions du modèle :**
+Ouvrez le *Model Dashboard* dans l'application Web (`make dev` puis via le menu latéral) pour une visualisation interactive de l'activation des neurones pour chaque trade !
 
 ## Modèle de sécurité (à ne jamais affaiblir)
 

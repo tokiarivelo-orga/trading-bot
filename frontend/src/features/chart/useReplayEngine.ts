@@ -307,7 +307,8 @@ export function useReplayEngine(params: UseReplayEngineParams) {
     if (total === 0) return;
     const clamped = Math.max(0, Math.min(index, total - 1));
     replayCursorIndexRef.current = clamped;
-    setReplayCursorIndex(clamped);
+    // Decouple React state update from current call stack to break "Maximum update depth" loops
+    requestAnimationFrame(() => setReplayCursorIndex(clamped));
     const chart = chartController.getChart();
     // Not following: capture the user's current view before `paintUpTo()`
     // touches the series data, and restore it exactly afterward — immune to

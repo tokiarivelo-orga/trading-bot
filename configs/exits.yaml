@@ -1,0 +1,119 @@
+# GIVE-BACK EXIT POLICY.
+# Trading-behaviour config, like volatility.yaml — safe to hand-edit. Not a
+# risk cap: it can only ever tighten a stop or close a position early, never
+# increase exposure, and it does not touch risk.yaml, the consecutive-loss
+# pause, or the kill switch.
+#
+# WHY IT EXISTS (measured on this account, see engine/domain/exit_policy.py):
+#   89.5% of losing live XAUUSD trades were in profit first.
+#   Those losers gave back 3,579R in aggregate; across all trades, 4,286R.
+#
+# WHAT IT BOUGHT, OUT OF SAMPLE (scripts/eval_giveback_exit.py):
+#   replay of 6,686 real closed trades over their own M1 paths, split 60/40
+#     baseline           OOS avg R -0.0737  PF 0.85  OOS max drawdown 287.6R
+#     arm 0.3 / keep 0.5 OOS avg R -0.0032  PF 0.99  OOS max drawdown  81.2R
+#   synthetic M5 entries, 2,830 trades
+#     baseline           OOS avg R -0.0076  PF 0.98  OOS max drawdown  33.0R
+#     arm 0.3 / keep 0.5 OOS avg R +0.0102  PF 1.03  OOS max drawdown  18.5R
+#
+# IMPORTANT — these parameters are NOT tunable on this data. Across the grid
+# the in-sample and out-of-sample results anti-correlate (r = -0.13 synthetic,
+# r = -0.00 live): every variant is worse than baseline in-sample, and the
+# best in-sample setting is among the worst out-of-sample. The values below
+# are a compromise that behaves reasonably in both halves of both harnesses,
+# NOT a fitted optimum. Re-tuning them against in-sample results would repeat
+# the mistake that produced a per-hour entry filter at PF 2.70 in-sample and
+# PF 0.12 out-of-sample.
+enabled: true
+
+# Peak unrealised profit (in R) before the give-back trail arms at all.
+arm_r: 0.3
+# Fraction of that peak locked in once armed (0.5 = give back at most half).
+keep_fraction: 0.5
+# The locked level never sits below this, so arming can never be worse than
+# the engine's own +0.2R secure buffer.
+min_lock_r: 0.2
+# A confirmed change of character against an already-profitable position
+# tightens to at least this.
+choch_lock_r: 0.2
+
+# Pull a resting take-profit in to the model's expected favourable excursion
+# when that is materially closer — a TP the market will not reach never fills.
+reduce_tp_enabled: true
+min_tp_reduction_r: 0.3
+
+# Model modulator. The smc_dl_m5_v2 revert head scores 50.4-50.8% accuracy
+# out-of-sample on a ~50/50 base rate — i.e. no skill — so this threshold is
+# set high enough that today's weights effectively never trigger it. Raise the
+# model's quality before lowering this.
+revert_probability_threshold: 0.80
+revert_min_peak_r: 0.3
+
+# ── PER-BOT OVERRIDES ────────────────────────────────────────────────
+# Keys are STRATEGY names (what scripts/eval_giveback_per_bot.py reports),
+# not skill names. Each entry inherits every value above and states only
+# what it changes.
+#
+# WHY THIS SECTION EXISTS. Replaying all 15 XAUUSD bots over their own real
+# M1 paths, chronologically split 60/40, the policy helped 8 and hurt 7:
+#
+#   xauusd_snd_qm_structure_m1           -150.6R ->  -31.5R   +119.0R
+#   xauusd_snd_qm_structure_fixed_m1     -106.0R ->   -7.7R    +98.3R
+#   xauusd_snd_apex_trendguard_m1         +25.2R ->  +34.8R     +9.7R
+#   ...
+#   xauusd_snd_qm_structure_adaptive_m1   +37.3R ->   -2.2R    -39.5R
+#
+# It rescues bots that are bleeding and taxes bots that are working, because
+# capping give-back also caps winners. The disables below are the bots where
+# the expectancy lost is NOT bought back by a meaningful drawdown reduction.
+#
+# The two M5 bots are deliberately LEFT ON: they lose ~4-5R of expectancy but
+# each buys a 10R drawdown reduction, which is the trade this policy exists
+# to make.
+# ── FIXED PROFIT TARGET (fixed_target_r) ─────────────────────────────
+# Off in the defaults above, ON for the M1 bots below. It is a resting
+# take-profit at N x risk, not a market close: PositionManager only runs at
+# M5 closes, so a market exit would book whatever the close happens to be,
+# while a resting TP fills at the level. SpreadGate's min_rr=1.5 floor
+# applies to entries, not to modifying an open position, so a 0.3R target is
+# reachable this way and no other.
+#
+# Measured on 1,549 out-of-sample live M1 trades
+# (scripts/eval_fixed_target_by_tf.py), chronologically split:
+#     baseline   -375.8R  PF 0.60
+#     0.20R       +79.4R  PF 1.56  (fires on 89% of trades)
+#     0.30R      +105.6R  PF 1.47  (fires on 82%)
+#     0.40R       +70.2R  PF 1.20
+#     0.50R      +103.5R  PF 1.26
+#     1.00R       -25.0R  PF 0.96
+# Four adjacent grid points positive — a plateau, not a spike. That shape is
+# why this is trusted where the per-hour entry filter was not.
+#
+# NOT applied to M15/H1: the same sweep moves M15 from -14.9R only to about
+# zero. This is a remedy for the M1 cost problem, not a general improvement.
+#
+# CAVEAT: the counterfactual deducts transaction cost but not exit slippage.
+# At ~82% fire rate even 0.02R of slippage per exit removes ~25R of the
+# +105.6R. The margin holds, but it is not unlimited — and this codebase has
+# already seen a backtest claim PF 2.41 for a bot that runs PF 0.96 live.
+per_bot:
+  # -39.5R for only 9.7R of drawdown saved — by far the worst trade in the fleet.
+  xauusd_snd_qm_structure_adaptive_m1:
+    enabled: false
+  # -1.9R for 0.1R saved.
+  trend_structure_v2:
+    enabled: false
+  # -1.4R for 1.2R saved.
+  trend_structure_v1:
+    enabled: false
+
+  # ── M1 bots: fixed 0.3R target (see the block above) ──
+  # The give-back trail stays on underneath; whichever protects more wins.
+  xauusd_snd_qm_structure_m1:
+    fixed_target_r: 0.3
+  xauusd_snd_qm_structure_fixed_m1:
+    fixed_target_r: 0.3
+  xauusd_snd_apex_trendguard_m1:
+    fixed_target_r: 0.3
+  xauusd_snd_adaptive_m1:
+    fixed_target_r: 0.3

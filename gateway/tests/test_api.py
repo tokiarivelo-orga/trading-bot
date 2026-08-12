@@ -199,14 +199,14 @@ def test_order_defaults_to_zero_magic(api):
 
 
 def test_order_bumps_volume_up_to_symbol_minimum(api, fake_mt5):
-    # A synthetic index (e.g. Deriv's Boom/Crash) with a coarser minimum
-    # than the forex-sized default rejected with retcode=10014 (invalid
-    # volume) before order_send clamped/snapped to what the symbol accepts.
+    # A synthetic index with a coarser minimum than the forex-sized default
+    # rejected with retcode=10014 (invalid volume) before order_send
+    # clamped/snapped to what the symbol accepts.
     fake_mt5.volume_min = 0.2
     fake_mt5.volume_max = 50.0
     fake_mt5.volume_step = 0.2
     _login(api)
-    response = api.post("/order", json={"symbol": "Boom 1000 Index", "side": "buy", "volume": 0.01})
+    response = api.post("/order", json={"symbol": "SYNTH_INDEX", "side": "buy", "volume": 0.01})
     assert response.status_code == 200
     assert response.json()["volume"] == 0.2
 

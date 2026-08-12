@@ -166,6 +166,10 @@ class TradeRecordOut(BaseModel):
             "journaled before Phase 6."
         ),
     )
+    mfe: float | None = Field(default=None, description="Max favorable excursion.")
+    mfe_time: int | None = Field(default=None, description="Time of MFE, epoch seconds UTC.")
+    mae: float | None = Field(default=None, description="Max adverse excursion.")
+    mae_time: int | None = Field(default=None, description="Time of MAE, epoch seconds UTC.")
 
 
 class CandleOut(BaseModel):
@@ -252,6 +256,9 @@ class TradeHistoryPage(BaseModel):
 
     items: list[TradeRecordOut] = Field(description="Trades matching the filters, one page.")
     total: int = Field(description="Total number of trades matching the filters, across all pages.")
+    total_profit: float = Field(
+        default=0.0, description="Total net profit matching the filters, across all pages."
+    )
 
 
 class SymbolAnalyticsOut(BaseModel):

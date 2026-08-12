@@ -95,7 +95,7 @@ def test_no_signal_with_insufficient_history():
     assert TrendStructureV1().evaluate(ctx) is None
 
 
-def test_spec_covers_all_three_symbols():
+def test_spec_covers_base_symbols():
     spec = TrendStructureV1().spec
-    assert set(spec.symbols) == {"XAUUSD", "XAGUSD", "BTCUSD"}
+    assert spec.symbols == ()  # empty = accepts all dynamically configured symbols
     assert spec.entry_timeframe == "M5"

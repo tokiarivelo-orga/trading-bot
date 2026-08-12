@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   Check,
   ChevronDown,
   ChevronsRight,
@@ -12,6 +13,7 @@ import {
   Layers,
   Pencil,
   PenTool,
+  RefreshCw,
   RotateCcw,
   Settings,
   Shield,
@@ -22,7 +24,7 @@ import {
 import { memo, type Ref } from 'react';
 import type { Candle } from '@/shared/api/client';
 import { REQUIRED_ANCHORS, TIMEFRAMES } from './chartFormat';
-import type { DrawingToolType } from './types';
+import type { DrawingToolType, GapRepairSummary } from './types';
 
 export interface ChartToolbarProps {
   symbol: string;
@@ -80,6 +82,15 @@ export interface ChartToolbarProps {
   showZoneColorSettings: boolean;
   onToggleZoneColorSettings: () => void;
 
+  // Missing-candle repair ("Fill gaps") — see useCandleGaps.ts
+  /** Actionable holes in the loaded window (weekend closures and holes the
+   * broker already refused to fill are excluded). */
+  candleGapCount: number;
+  candleGapMissingBars: number;
+  candleGapRepairing: boolean;
+  candleGapResult: GapRepairSummary | null;
+  onRepairCandleGaps: () => void;
+
   // Session replay
   backtestReportId?: string | null;
   sessionReplayPeriod: { from: number; to: number } | null;
@@ -101,6 +112,20 @@ export interface ChartToolbarProps {
   volatilityGuardEnabled: boolean | null;
   volatilityGuardSaving: boolean;
   onToggleVolatilityGuard: () => void;
+}
+
+/** One line of feedback after a "Fill gaps" run. Leads with bars recovered
+ * rather than holes closed: a hole that shrank (an outage running into the
+ * broker's nightly break) still gave back real candles, and reporting only
+ * the leftover closure would read as "nothing happened". */
+function gapResultText(result: GapRepairSummary): string {
+  if (result.error) return `Refetch failed: ${result.error}`;
+  const recovered =
+    result.barsRecovered > 0 ? `Recovered ${result.barsRecovered} candle(s)` : '';
+  const closed =
+    result.remaining > 0 ? `${result.remaining} gap(s) left — market closed` : '';
+  if (recovered && closed) return `${recovered} · ${closed}`;
+  return recovered || closed || 'History complete';
 }
 
 /** Top toolbar row of the chart panel: symbol tag, timeframe pills/dropdown,
@@ -149,6 +174,11 @@ export const ChartToolbar = memo(function ChartToolbar({
   onToggleOrderLineSettings,
   showZoneColorSettings,
   onToggleZoneColorSettings,
+  candleGapCount,
+  candleGapMissingBars,
+  candleGapRepairing,
+  candleGapResult,
+  onRepairCandleGaps,
   backtestReportId,
   sessionReplayPeriod,
   showSessionReplayPicker,
@@ -540,6 +570,50 @@ export const ChartToolbar = memo(function ChartToolbar({
             <span>Volatility guard: {volatilityGuardSaving ? '…' : volatilityGuardEnabled ? 'ON' : 'OFF'}</span>
           </button>
         )}
+
+        {/* Missing-candle repair. Always clickable, not just when a gap was
+            detected: the scan only sees the local database, so this doubles
+            as "refetch this window from the broker" for bars that look wrong
+            for any other reason. */}
+        <div className='flex items-center gap-1.5'>
+          <button
+            type='button'
+            disabled={candleGapRepairing}
+            className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-all disabled:cursor-wait disabled:opacity-70 ${
+              candleGapCount > 0
+                ? 'border-sell/50 bg-sell/10 text-sell'
+                : 'border-line bg-bg/70 text-ink-muted hover:border-accent/60 hover:text-accent'
+            }`}
+            onClick={onRepairCandleGaps}
+            title={
+              candleGapCount > 0
+                ? `${candleGapCount} gap(s) — ${candleGapMissingBars} candle(s) missing from this window. ` +
+                  'The chart draws straight across them, so indicators and bot analysis on this range are wrong. ' +
+                  'Click to re-download them from the broker.'
+                : 'Re-download this window’s candles from the broker and redraw the chart (no gaps detected in local history)'
+            }
+          >
+            {candleGapCount > 0 && !candleGapRepairing ? (
+              <AlertTriangle size={13} />
+            ) : (
+              <RefreshCw size={13} className={candleGapRepairing ? 'animate-spin' : ''} />
+            )}
+            <span>{candleGapRepairing ? 'Filling gaps…' : 'Fill gaps'}</span>
+            {candleGapCount > 0 && !candleGapRepairing && (
+              <span className='rounded-full bg-sell px-1.5 py-0.2 text-[10px] font-bold leading-none text-white'>
+                {candleGapCount}
+              </span>
+            )}
+          </button>
+
+          {candleGapResult && !candleGapRepairing && (
+            <span
+              className={`text-[11px] ${candleGapResult.error ? 'text-err' : 'text-ink-muted'}`}
+            >
+              {gapResultText(candleGapResult)}
+            </span>
+          )}
+        </div>
 
         {/* Session Replay Button */}
         {!backtestReportId && (

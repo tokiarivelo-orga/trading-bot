@@ -151,6 +151,10 @@ function TradesTable({
           <SortTh className="px-3 py-2 font-medium" label="Close price" sortKey="close_price" sort={sort} onSort={toggle} align="right" />
           <th className="px-3 py-2 font-medium">Close reason</th>
           <SortTh className="px-3 py-2 font-medium" label="P/L" sortKey="profit" sort={sort} onSort={toggle} align="right" />
+          <th className="px-3 py-2 font-medium text-right">Max Profit (MFE)</th>
+          <th className="px-3 py-2 font-medium">MFE Axis</th>
+          <th className="px-3 py-2 font-medium text-right">Max Drawdown (MAE)</th>
+          <th className="px-3 py-2 font-medium">MAE Axis</th>
           <SortTh className="px-3 py-2 font-medium" label="Strategy" sortKey="strategy_version" sort={sort} onSort={toggle} />
           <SortTh className="px-3 py-2 font-medium" label="Skill" sortKey="skill" sort={sort} onSort={toggle} />
           <SortTh className="px-3 py-2 font-medium" label="Outcome" sortKey="outcome" sort={sort} onSort={toggle} />
@@ -170,7 +174,7 @@ function TradesTable({
             }`}
             title={`Highlight #${t.id} on the chart`}
           >
-            <Td>{t.symbol}</Td>
+            <Td className={getBannerClass(t)}>{t.symbol}</Td>
             <Td className={t.side === "buy" ? "text-ok" : "text-err"}>{t.side}</Td>
             <Td align="right">{t.volume}</Td>
             <Td>{formatTime(t.open_time)}</Td>
@@ -179,7 +183,19 @@ function TradesTable({
             <Td align="right">{t.close_price ?? "—"}</Td>
             <Td className="text-ink-muted">{t.close_reason ?? "—"}</Td>
             <Td align="right" className={plTone(t.profit)}>
-              {t.profit !== null ? t.profit.toFixed(2) : "—"}
+              {t.profit != null ? t.profit.toFixed(2) : "—"}
+            </Td>
+            <Td align="right" className="text-ok">
+              {t.mfe != null ? t.mfe.toFixed(5) : "—"}
+            </Td>
+            <Td className="text-ink-muted text-xs">
+              {t.mfe_time != null ? formatTime(t.mfe_time) : "—"}
+            </Td>
+            <Td align="right" className="text-err">
+              {t.mae != null ? t.mae.toFixed(5) : "—"}
+            </Td>
+            <Td className="text-ink-muted text-xs">
+              {t.mae_time != null ? formatTime(t.mae_time) : "—"}
             </Td>
             <Td className="text-ink-muted">{t.strategy_version ?? "—"}</Td>
             <Td className="text-ink-muted">{t.skill ?? "—"}</Td>
@@ -202,6 +218,33 @@ function TradesTable({
 function plTone(profit: number | null): string {
   if (profit === null) return "";
   return profit >= 0 ? "text-ok" : "text-err";
+}
+
+function getBannerClass(t: TradeHistoryItem): string {
+  if (t.profit === null) return "border-l-4 border-l-transparent";
+  if (t.profit < 0) return "border-l-4 border-l-err";
+
+  let isSl = false;
+  const comment = (t.comment || "").toLowerCase();
+  const reason = (t.close_reason || "").toLowerCase();
+  
+  if (comment.includes("[sl]") || reason.includes("sl")) {
+    isSl = true;
+  } else if (comment.includes("[tp]") || reason.includes("tp")) {
+    isSl = false;
+  } else if (t.close_price !== null && t.sl !== null) {
+    if (t.tp !== null) {
+      const distTp = Math.abs(t.close_price - t.tp);
+      const distSl = Math.abs(t.close_price - t.sl);
+      if (distSl < distTp) isSl = true;
+    } else {
+      const distSl = Math.abs(t.close_price - t.sl);
+      const tradeSize = Math.abs(t.open_price - t.close_price);
+      if (tradeSize > 0 && distSl / tradeSize < 0.2) isSl = true;
+    }
+  }
+
+  return isSl ? "border-l-4 border-l-[#ff9800]" : "border-l-4 border-l-ok";
 }
 
 function formatTime(epochSeconds: number): string {

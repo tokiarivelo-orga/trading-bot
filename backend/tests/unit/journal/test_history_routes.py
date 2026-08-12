@@ -102,6 +102,7 @@ async def test_returns_all_trades_with_total(api):
     assert response.status_code == 200
     body = response.json()
     assert body["total"] == 3
+    assert body["total_profit"] == pytest.approx(6.65)
     assert [t["id"] for t in body["items"]] == ["3", "2", "1"]  # open_time desc
 
 

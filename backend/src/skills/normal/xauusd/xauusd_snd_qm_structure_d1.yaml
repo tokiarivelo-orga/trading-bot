@@ -1,6 +1,6 @@
-name: normal/xauusd/breakout_v1
+name: normal/xauusd/xauusd_snd_qm_structure_d1
 symbol: XAUUSD
-strategy: breakout_v1
+strategy: xauusd_snd_qm_structure_d1
 risk_multiplier: 1.0
 sessions: []
 param_overrides: {}

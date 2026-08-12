@@ -44,13 +44,13 @@ def test_vetoes_when_rr_too_low_after_spread_adjustment():
 
 def test_unconfigured_symbol_has_no_spread_cap():
     gate = make_gate()
-    # No config for "Boom 1000 Index" — an enormous spread_points count would
+    # No config for an unknown symbol — an enormous spread_points count would
     # have failed any flat cap (e.g. XAUUSD's 35), but there's none to guess
     # at for an arbitrary symbol's own point scale, so it's skipped. Keep
     # `point` tiny so the spread's contribution to the (still-enforced) RR
     # check stays negligible — isolates the spread-cap behavior from RR.
     veto = gate.check(
-        "Boom 1000 Index", spread_points=9999, point=0.00001, sl_distance=10.0, tp_distance=20.0
+        "SYNTH_UNKNOWN", spread_points=9999, point=0.00001, sl_distance=10.0, tp_distance=20.0
     )
     assert veto is None
 
@@ -58,7 +58,7 @@ def test_unconfigured_symbol_has_no_spread_cap():
 def test_unconfigured_symbol_still_enforces_default_rr():
     gate = make_gate()
     veto = gate.check(
-        "Boom 1000 Index", spread_points=5, point=0.01, sl_distance=10.0, tp_distance=5.0
+        "SYNTH_UNKNOWN", spread_points=5, point=0.01, sl_distance=10.0, tp_distance=5.0
     )
     assert veto is not None
     assert "min_rr=1.0" in veto.reason
@@ -70,7 +70,7 @@ def test_zero_distance_is_still_rejected_by_rr():
     # against and rejects, unlike the None ("not provided") case below.
     gate = make_gate()
     veto = gate.check(
-        "Boom 1000 Index", spread_points=5, point=0.01, sl_distance=0.0, tp_distance=0.0
+        "SYNTH_UNKNOWN", spread_points=5, point=0.01, sl_distance=0.0, tp_distance=0.0
     )
     assert veto is not None
 
@@ -131,7 +131,7 @@ def test_set_config_applies_immediately():
 
 def test_get_config_returns_none_for_unconfigured_symbol():
     gate = make_gate()
-    assert gate.get_config("Boom 1000 Index") is None
+    assert gate.get_config("SYNTH_UNKNOWN") is None
 
 
 def test_get_config_returns_stored_config():
@@ -162,4 +162,4 @@ def test_update_min_rr_applies_immediately():
 def test_update_min_rr_raises_for_unconfigured_symbol():
     gate = make_gate()
     with pytest.raises(KeyError):
-        gate.update_min_rr("Boom 1000 Index", 1.0)
+        gate.update_min_rr("SYNTH_UNKNOWN", 1.0)

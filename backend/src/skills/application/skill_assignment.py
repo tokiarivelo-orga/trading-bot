@@ -310,15 +310,23 @@ class SkillAssignmentService:
         return skill, strategy
 
     async def remove_bot(self, symbol: str, bot_name: str) -> None:
-        """Deactivates one bot on `symbol`. Deliberately leaves the symbol
-        itself in the automated-trading universe (configs/app.yaml, candle
-        streaming) even if this was its last bot — a symbol with zero
-        active bots is a valid, quiet state; nothing re-activates it until
-        `add_bot()` is called again."""
+        """Deactivates one bot on `symbol`. If this was the last bot on the symbol,
+        removes the symbol from configs/app.yaml and hot-removes it from candle streaming
+        so the backend stops fetching unnecessarily."""
         bot_slug = slugify(bot_name)
         existing = await asyncio.to_thread(self._repository.get, symbol, bot_slug)
         if existing is None:
             raise UnknownBotError(f"{symbol!r} has no bot named {bot_slug!r}")
         await asyncio.to_thread(self._repository.delete, symbol, bot_slug)
         self._selector.remove(symbol, bot_slug)
+        
+        # Check if it was the last bot
+        remaining_bots = await asyncio.to_thread(self._repository.list_for_symbol, symbol)
+        if not remaining_bots:
+            from src.shared.config.app_config_writer import remove_symbol_from_app_config
+            await asyncio.to_thread(remove_symbol_from_app_config, symbol, self._configs_dir)
+            if self._candle_stream:
+                self._candle_stream.remove_symbol(symbol)
+            logger.info("symbol %s removed from automated trading because its last bot was deleted", symbol)
+            
         logger.info("bot %s removed from %s", bot_slug, symbol)

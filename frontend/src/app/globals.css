@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@plugin "../../node_modules/@tailwindcss/typography";
 
 /* TradingView-dark design tokens — use these via Tailwind utilities
    (bg-panel, border-line, text-ok, …), never as raw hex in components. */

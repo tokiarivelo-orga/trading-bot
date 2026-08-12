@@ -10,6 +10,7 @@ another module's internals (see CLAUDE.md "Architecture").
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -210,3 +211,195 @@ class StrategyVersionDetailOut(StrategyVersionOut):
     def from_domain_with_code(version: StrategyVersion, code: str) -> StrategyVersionDetailOut:
         summary = StrategyVersionOut.from_domain(version).model_dump()
         return StrategyVersionDetailOut(**summary, code=code)
+
+
+# ---------------------------------------------------------------------------
+# Deep-learning model training (see api/routes_training.py)
+# ---------------------------------------------------------------------------
+class StartTrainingRequest(BaseModel):
+    """Body for `POST /model-training/runs`."""
+
+    symbol: str = Field(
+        default="XAUUSD",
+        description="Broker symbol to train on. Its M5/M15/H1/H4 candles must already be in "
+        "the `candles` table — training reads the database, it does not fetch history.",
+        examples=["XAUUSD", "Step Index 200"],
+    )
+
+
+class TrainingRunOut(BaseModel):
+    """One training run's lifecycle. Mirrors
+    `strategies/application/model_training.TrainingRun`."""
+
+    id: str = Field(description="Run identifier, unique per backend process.")
+    symbol: str = Field(description="Symbol this run trained on.")
+    model_name: str = Field(
+        description="Weights file stem written to `data/ml_models/`, e.g. `smc_dl_m5_v2`."
+    )
+    state: str = Field(description="One of: running, succeeded, failed.")
+    started_at: datetime = Field(description="When the training subprocess was launched (UTC).")
+    finished_at: datetime | None = Field(
+        default=None, description="When it exited (UTC); null while still running."
+    )
+    exit_code: int | None = Field(
+        default=None, description="Subprocess exit status; null while still running."
+    )
+    error: str | None = Field(
+        default=None, description="Failure reason when `state` is `failed`, else null."
+    )
+    log_tail: list[str] = Field(
+        default_factory=list,
+        description="Last lines of the run's combined stdout/stderr, which include the "
+        "walk-forward table and the in-sample vs out-of-sample verdict.",
+    )
+
+    @classmethod
+    def from_domain(cls, run) -> TrainingRunOut:
+        return cls(
+            id=run.id,
+            symbol=run.symbol,
+            model_name=run.model_name,
+            state=run.state,
+            started_at=run.started_at,
+            finished_at=run.finished_at,
+            exit_code=run.exit_code,
+            error=run.error,
+            log_tail=list(run.log_tail),
+        )
+
+
+class TrainingSummaryOut(BaseModel):
+    """Walk-forward verdict for a trained model — the numbers that decide
+    whether it should be switched on."""
+
+    folds: int = Field(default=0, description="Number of chronological folds evaluated.")
+    is_avg_r_mean: float | None = Field(
+        default=None, description="Mean in-sample average R across folds."
+    )
+    oos_avg_r_mean: float | None = Field(
+        default=None,
+        description="Mean out-of-sample average R across folds. This is the number that "
+        "matters; a large gap to `is_avg_r_mean` is overfitting.",
+    )
+    oos_avg_r_min: float | None = Field(
+        default=None, description="Worst fold's out-of-sample average R."
+    )
+    oos_pf_mean: float | None = Field(
+        default=None, description="Mean out-of-sample profit factor across folds."
+    )
+    oos_trades_total: int | None = Field(
+        default=None, description="Total trades the gate would have taken out-of-sample."
+    )
+    folds_positive_oos: int | None = Field(
+        default=None, description="How many folds had a positive out-of-sample average R."
+    )
+    brier_secure_is_mean: float | None = Field(
+        default=None, description="In-sample Brier score of the secure head (lower is better)."
+    )
+    brier_secure_oos_mean: float | None = Field(
+        default=None, description="Out-of-sample Brier score of the secure head."
+    )
+    threshold_tunable: str | None = Field(
+        default=None,
+        description="Whether the expected-R gate threshold's in-sample and out-of-sample "
+        "optima agree. 'NOT TUNABLE' means the parameter must not be fitted on in-sample "
+        "results — doing so produced a PF 2.70 in-sample / PF 0.12 out-of-sample filter here.",
+    )
+
+
+class TrainedModelOut(BaseModel):
+    """A model on disk. Mirrors
+    `strategies/application/model_training.TrainedModel`."""
+
+    model_name: str = Field(description="Weights file stem, e.g. `smc_dl_m5_v2`.")
+    symbol: str = Field(description="Symbol the model was trained on.")
+    trained_at: datetime | None = Field(
+        default=None, description="When training finished (UTC), from the model's metadata."
+    )
+    n_bars: int = Field(description="Usable training bars after feature/label alignment.")
+    data_start: str | None = Field(
+        default=None, description="Timestamp of the first bar in the training set."
+    )
+    data_end: str | None = Field(
+        default=None, description="Timestamp of the last bar in the training set."
+    )
+    feature_count: int = Field(description="Number of input features the weights expect.")
+    weights_bytes: int = Field(description="Size of the `.pt` file on disk; 0 if it is missing.")
+    summary: TrainingSummaryOut = Field(
+        description="Walk-forward verdict — see `TrainingSummaryOut`."
+    )
+
+    # `model_` is Pydantic's protected namespace; these fields are model
+    # *metadata*, not Pydantic config, so the warning is silenced explicitly.
+    model_config = {"protected_namespaces": ()}
+
+    @classmethod
+    def from_domain(cls, model) -> TrainedModelOut:
+        return cls(
+            model_name=model.model_name,
+            symbol=model.symbol,
+            trained_at=model.trained_at,
+            n_bars=model.n_bars,
+            data_start=model.data_start,
+            data_end=model.data_end,
+            feature_count=model.feature_count,
+            weights_bytes=model.weights_bytes,
+            summary=TrainingSummaryOut(**{
+                key: value
+                for key, value in (model.summary or {}).items()
+                if key in TrainingSummaryOut.model_fields
+            }),
+        )
+
+
+class FoldEconomicsOut(BaseModel):
+    """Realised R of the trades a fold's gate would have taken. Win rate is
+    intentionally absent — see `routes_training.list_models`."""
+
+    trades: int = Field(default=0, description="Non-overlapping trades taken in this fold.")
+    sum_r: float = Field(default=0.0, description="Total R booked.")
+    avg_r: float = Field(default=0.0, description="Average R per trade.")
+    profit_factor: float = Field(default=0.0, description="Gross win R / gross loss R.")
+    max_drawdown_r: float = Field(
+        default=0.0, description="Worst peak-to-trough equity drop, in R."
+    )
+
+
+class WalkForwardFoldOut(BaseModel):
+    """One chronological fold of the walk-forward validation."""
+
+    fold: int = Field(description="1-based fold index, in time order.")
+    oos_start: str = Field(description="First out-of-sample bar timestamp.")
+    oos_end: str = Field(description="Last out-of-sample bar timestamp.")
+    temperature: float = Field(
+        description="Calibration temperature fitted on a held-out tail of the training window."
+    )
+    brier_secure_is: float = Field(description="In-sample Brier score of the secure head.")
+    brier_secure_oos: float = Field(description="Out-of-sample Brier score of the secure head.")
+    revert_acc_oos: float = Field(
+        description="Out-of-sample accuracy of the reversal head against a ~50/50 base rate. "
+        "Values near 0.50 mean the head has no skill and exits must not be gated on it."
+    )
+    base_rate_secure_oos: float = Field(
+        description="Fraction of out-of-sample bars that actually secured, for reference "
+        "against the 0.833 break-even of the engine's 0.2R trailing rule."
+    )
+    economics_is: FoldEconomicsOut = Field(description="In-sample trade economics for this fold.")
+    economics_oos: FoldEconomicsOut = Field(
+        description="Out-of-sample trade economics for this fold — the honest number."
+    )
+
+    @classmethod
+    def from_meta(cls, fold: dict) -> WalkForwardFoldOut:
+        return cls(
+            fold=int(fold.get("fold", 0)),
+            oos_start=str(fold.get("oos_start", "")),
+            oos_end=str(fold.get("oos_end", "")),
+            temperature=float(fold.get("temperature", 1.0)),
+            brier_secure_is=float(fold.get("brier_secure_is", 0.0)),
+            brier_secure_oos=float(fold.get("brier_secure_oos", 0.0)),
+            revert_acc_oos=float(fold.get("revert_acc_oos", 0.0)),
+            base_rate_secure_oos=float(fold.get("base_rate_secure_oos", 0.0)),
+            economics_is=FoldEconomicsOut(**(fold.get("economics_is") or {})),
+            economics_oos=FoldEconomicsOut(**(fold.get("economics_oos") or {})),
+        )

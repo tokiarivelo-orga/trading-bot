@@ -16,7 +16,15 @@ from src.shared.events.definitions import (
 )
 from src.shared.logging.account_context import current_signal_id
 from src.skills.ports.skill_selector import SkillDecision
-from src.strategies.domain.models import Direction, MarketContext, Signal, StrategySpec
+from src.strategies.domain.models import (
+    Direction,
+    ExitActionKind,
+    ExitDecision,
+    MarketContext,
+    PositionSnapshot,
+    Signal,
+    StrategySpec,
+)
 
 XAUUSD_INFO = SymbolInfo(
     symbol="XAUUSD",
@@ -306,9 +314,13 @@ class FakeAccountService:
 class FakePositionManager:
     def __init__(self):
         self.calls: list[str] = []
+        self.applied_actions: list[tuple[int, ExitActionKind, str]] = []
 
     async def on_candle_closed(self, symbol):
         self.calls.append(symbol)
+
+    async def apply_strategy_action(self, position, action):
+        self.applied_actions.append((position.ticket, action.action, action.reason))
 
 
 class FakeSkillSelector:
@@ -356,6 +368,26 @@ class ThresholdFakeStrategy(FakeStrategy):
         if self.spec.params.get("threshold", 1) <= 0:
             return BUY_SIGNAL
         return None
+
+
+class FakeExitStrategy(FakeStrategy):
+    """Returns `ExitDecision`s (optionally alongside a `Signal`) instead of
+    just a `Signal`, and records the `MarketContext.own_position` it was
+    handed on each call — so tests can assert both what the engine did with
+    the decisions and what it told the strategy about its own position."""
+
+    def __init__(self, exit_decisions, signal: Signal | None = None, **kwargs):
+        super().__init__(signal, **kwargs)
+        self._exit_decisions = (
+            exit_decisions if isinstance(exit_decisions, (list, tuple)) else (exit_decisions,)
+        )
+        self.seen_own_positions: list[PositionSnapshot | None] = []
+
+    def evaluate(self, ctx: MarketContext):
+        self.seen_own_positions.append(ctx.own_position)
+        if self._signal is not None:
+            return (*self._exit_decisions, self._signal)
+        return self._exit_decisions if len(self._exit_decisions) != 1 else self._exit_decisions[0]
 
 
 class FakeStrategySource:
@@ -1339,3 +1371,155 @@ async def test_risk_sizing_rejection_prefix_has_no_tp_index(caplog):
     signals = _trail(caplog)
     assert len(signals) == 1
     assert signals[0].outcome == "risk_rejected"
+
+
+async def test_own_position_populated_in_context_when_bot_has_one_open():
+    existing = Position(
+        ticket=7,
+        symbol="XAUUSD",
+        side=Side.SELL,
+        volume=0.1,
+        open_price=2450.0,
+        sl=2460.0,
+        tp=2430.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=999,
+    )
+    order_service = FakeOrderService(positions=[existing])
+    strategy = FakeExitStrategy((), signal=None)
+    engine, order_service, *_ = make_engine(order_service=order_service, strategy=strategy)
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert len(strategy.seen_own_positions) == 1
+    snapshot = strategy.seen_own_positions[0]
+    assert snapshot is not None
+    assert snapshot.direction is Direction.SELL
+    assert snapshot.entry_price == 2450.0
+    assert snapshot.sl == 2460.0
+    assert snapshot.tp == 2430.0
+
+
+async def test_own_position_none_in_context_when_bot_has_no_open_position():
+    strategy = FakeExitStrategy((), signal=None)
+    engine, *_ = make_engine(strategy=strategy)
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert strategy.seen_own_positions == [None]
+
+
+async def test_exit_decision_close_routes_to_position_manager_and_frees_pretrade_slot():
+    existing = Position(
+        ticket=7,
+        symbol="XAUUSD",
+        side=Side.SELL,
+        volume=0.1,
+        open_price=2450.0,
+        sl=2460.0,
+        tp=2430.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=999,
+    )
+    order_service = FakeOrderService(positions=[existing])
+    strategy = FakeExitStrategy(
+        ExitDecision(action=ExitActionKind.CLOSE, reason="fvg violated"), signal=BUY_SIGNAL
+    )
+    engine, order_service, _, position_manager = make_engine(
+        order_service=order_service, strategy=strategy
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert position_manager.applied_actions == [(7, ExitActionKind.CLOSE, "fvg violated")]
+    # Freed the slot in the same pass a new entry opened, mirroring
+    # close_on_opposite_signal's contract.
+    assert len(order_service.opened) == 1
+
+
+async def test_exit_decision_ignores_other_bots_and_manual_positions():
+    other_bots_position = Position(
+        ticket=8,
+        symbol="XAUUSD",
+        side=Side.SELL,
+        volume=0.1,
+        open_price=2450.0,
+        sl=2460.0,
+        tp=2430.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=111,
+    )
+    order_service = FakeOrderService(positions=[other_bots_position])
+    strategy = FakeExitStrategy(
+        ExitDecision(action=ExitActionKind.CLOSE, reason="fvg violated"), signal=BUY_SIGNAL
+    )
+    engine, order_service, _, position_manager = make_engine(
+        order_service=order_service, strategy=strategy
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert position_manager.applied_actions == []
+
+
+async def test_exit_decision_alone_with_no_fresh_signal_still_applies():
+    # A strategy with an open position but no new entry opportunity this
+    # candle (evaluate() returns only an ExitDecision, no Signal) must still
+    # get routed — this is exactly the case `close_on_opposite_signal`
+    # cannot cover, since that only fires alongside a fresh signal.
+    existing = Position(
+        ticket=7,
+        symbol="XAUUSD",
+        side=Side.BUY,
+        volume=0.1,
+        open_price=2400.0,
+        sl=2390.0,
+        tp=2420.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=999,
+    )
+    order_service = FakeOrderService(positions=[existing])
+    strategy = FakeExitStrategy(
+        ExitDecision(action=ExitActionKind.BREAKEVEN, reason="continuation confirmed"),
+        signal=None,
+    )
+    engine, order_service, _, position_manager = make_engine(
+        order_service=order_service, strategy=strategy
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert position_manager.applied_actions == [
+        (7, ExitActionKind.BREAKEVEN, "continuation confirmed")
+    ]
+    assert order_service.opened == []
+
+
+async def test_account_status_refetched_after_exit_decision_close():
+    existing = Position(
+        ticket=7,
+        symbol="XAUUSD",
+        side=Side.SELL,
+        volume=0.1,
+        open_price=2450.0,
+        sl=2460.0,
+        tp=2430.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=999,
+    )
+    order_service = FakeOrderService(positions=[existing])
+    strategy = FakeExitStrategy(ExitDecision(action=ExitActionKind.CLOSE), signal=BUY_SIGNAL)
+    account = FakeAccountService(balance=10_000.0)
+    engine, order_service, *_ = make_engine(
+        order_service=order_service, strategy=strategy, account=account
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert len(order_service.opened) == 1
+    assert account.calls == 2

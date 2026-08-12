@@ -62,6 +62,7 @@ const TYPE_LABELS: Record<ManualIndicatorType, string> = {
   snd_v2: "S&D zones v2 (bases + ranges)",
   base: "Base ranges (2 lines)",
   patterns: "Candlestick patterns",
+  smc: "Smart Money Concept (SMC)",
   custom: "Custom (saved indicator)",
 };
 
@@ -92,6 +93,7 @@ const TYPE_DEFAULTS: Record<ManualIndicatorType, { period: number; editablePerio
   // period is the base's minimum candle count for detectBases().
   base: { period: 5, editablePeriod: true },
   patterns: { period: 0, editablePeriod: false }, // fixed thresholds, no period
+  smc: { period: 20, editablePeriod: true },
   // Params come from the saved indicator's own default_params (edit them on
   // /indicators, or from the code-peek panel below) rather than this dock.
   custom: { period: 0, editablePeriod: false },
@@ -122,6 +124,8 @@ function indicatorLabel(type: ManualIndicatorType, period: number): string {
       return `Base ranges (min ${period}c)`;
     case "patterns":
       return "Candlestick patterns";
+    case "smc":
+      return `SMC (lookback ${period})`;
     default:
       return `${TYPE_LABELS[type]} (${period})`;
   }
@@ -683,6 +687,22 @@ export function IndicatorsDock({ indicators, onAdd, onRemove, onUpdate, onCustom
                   ✏️
                 </button>
               )}
+              <button
+                title={ind.hidden ? "Show this indicator" : "Hide this indicator"}
+                onClick={() => onUpdate?.(ind.id, { hidden: !ind.hidden })}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  cursor: "pointer",
+                  color: ind.hidden ? "var(--color-ink-muted)" : "var(--color-ink)",
+                  fontSize: 11,
+                  padding: 0,
+                  lineHeight: 1,
+                  opacity: ind.hidden ? 0.5 : 1,
+                }}
+              >
+                👁
+              </button>
               <button
                 title="Remove this indicator"
                 onClick={() => onRemove(ind.id)}

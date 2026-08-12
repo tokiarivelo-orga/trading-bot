@@ -21,7 +21,7 @@ class BreakoutV1:
         self.spec = StrategySpec(
             name="breakout_v1",
             version=1,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=("H1", "H4"),
             params={"lookback": LOOKBACK, "tp_rr": TP_RR},

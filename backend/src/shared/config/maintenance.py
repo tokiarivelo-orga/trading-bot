@@ -13,3 +13,10 @@ class MaintenanceConfig:
     activity_log_check_interval_hours: float
     wal_checkpoint_enabled: bool
     wal_checkpoint_interval_minutes: float
+    # Bi-weekly deep-learning retraining — see
+    # `strategies/application/training_scheduler.py` for why the schedule is
+    # an interval rather than a cron expression.
+    model_training_enabled: bool
+    model_training_interval_days: float
+    model_training_on_startup: bool
+    model_training_symbols: tuple[str, ...]

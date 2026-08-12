@@ -77,7 +77,7 @@ class BreakoutV2:
         self.spec = StrategySpec(
             name="breakout_v2",
             version=2,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=("H1", "H4"),
             params={

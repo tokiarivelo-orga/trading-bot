@@ -33,6 +33,7 @@ close price alone is enough to extend the excursion.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 BUY = "buy"
 
@@ -44,6 +45,8 @@ class Excursion:
 
     mfe: float = 0.0
     mae: float = 0.0
+    mfe_time: datetime | None = None
+    mae_time: datetime | None = None
 
 
 def extend_excursion(
@@ -53,6 +56,7 @@ def extend_excursion(
     open_price: float,
     high: float,
     low: float,
+    time: datetime,
 ) -> Excursion:
     """Widens `current` with a price range the trade lived through.
 
@@ -67,19 +71,28 @@ def extend_excursion(
     else:
         favorable = open_price - low
         adverse = high - open_price
+        
+    new_mfe = max(current.mfe, favorable, 0.0)
+    mfe_time = time if new_mfe > current.mfe or current.mfe_time is None else current.mfe_time
+    
+    new_mae = max(current.mae, adverse, 0.0)
+    mae_time = time if new_mae > current.mae or current.mae_time is None else current.mae_time
+    
     return Excursion(
-        mfe=max(current.mfe, favorable, 0.0),
-        mae=max(current.mae, adverse, 0.0),
+        mfe=new_mfe,
+        mae=new_mae,
+        mfe_time=mfe_time,
+        mae_time=mae_time,
     )
 
 
 def finalize_excursion(
-    current: Excursion, *, side: str, open_price: float, close_price: float
+    current: Excursion, *, side: str, open_price: float, close_price: float, time: datetime
 ) -> Excursion:
     """Excursion at the moment the trade closed: whatever was accumulated
     from closed candles, extended by the exit price itself. A position that
     opened and closed within one candle never saw a candle close, so this
     call is the only thing that gives it non-zero numbers."""
     return extend_excursion(
-        current, side=side, open_price=open_price, high=close_price, low=close_price
+        current, side=side, open_price=open_price, high=close_price, low=close_price, time=time
     )

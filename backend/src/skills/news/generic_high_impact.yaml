@@ -7,7 +7,7 @@ name: generic_high_impact
 activation:
   calendar_event: ["*"]
   window: { before_min: 15, after_min: 30 }
-  symbols: [XAUUSD, XAGUSD, BTCUSD]
+  symbols: []  # empty = applies to all active symbols
 rules:
   pre_event: { close_all: true, block_new_entries: true }
   post_event:

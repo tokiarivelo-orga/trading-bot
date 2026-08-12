@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
@@ -74,6 +74,7 @@ from src.engine.application.manual_trading import ManualTradeGate
 from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager, apply_risk_override
 from src.engine.application.trade_loop import TradeEngine
+from src.engine.domain.exit_policy import ExitPolicySettings
 from src.engine.domain.models import RiskCaps
 from src.engine.domain.regime import RegimeConfig
 from src.engine.domain.volatility import VolatilityConfig
@@ -99,6 +100,7 @@ from src.shared.auth.session import SessionTokenIssuer
 from src.shared.config.loaders import (
     load_accounts_config,
     load_alerting_config,
+    load_exit_policy_settings,
     load_llm_provider_config,
     load_maintenance_config,
     load_news_config,
@@ -135,9 +137,12 @@ from src.skills.domain.models import (
     NewsSkill,
     PostEventRules,
     PreEventRules,
+    magic_number,
 )
 from src.skills.ports.skill_selector import SkillSelectorPort
 from src.strategies.adapters.repository import StrategyVersionRepository
+from src.strategies.application.model_training import ModelTrainingService
+from src.strategies.application.training_scheduler import TrainingScheduler
 from src.strategies.application.versioning import StrategyVersionService
 from src.strategies.domain.models import Strategy
 from src.strategies.generated.breakout_v1 import BreakoutV1
@@ -308,6 +313,8 @@ class Container:
     news_window_service: NewsWindowService
     activity_log_retention_service: ActivityLogRetentionService
     wal_checkpoint_service: WalCheckpointService
+    model_training: ModelTrainingService
+    training_scheduler: TrainingScheduler
     accounts: dict[str, AccountRuntime]
     primary_account_id: str
 
@@ -466,8 +473,21 @@ def build_container(settings: Settings | None = None) -> Container:
         enabled=maintenance_config.wal_checkpoint_enabled,
     )
 
+    # Deep-learning retraining: one service shared by the API's "Train"
+    # button and the bi-weekly scheduler, so a manual run and a scheduled run
+    # are the same object with the same history and cannot race each other.
+    model_training = ModelTrainingService(repo_root=Path(__file__).resolve().parent.parent)
+    training_scheduler = TrainingScheduler(
+        model_training,
+        list(maintenance_config.model_training_symbols) or symbols,
+        interval_days=maintenance_config.model_training_interval_days,
+        enabled=maintenance_config.model_training_enabled,
+        train_on_startup=maintenance_config.model_training_on_startup,
+    )
+
     global_risk_caps = load_risk_caps(settings.configs_dir)
     volatility_config = load_volatility_config(settings.configs_dir)
+    exit_policy_settings = load_exit_policy_settings(settings.configs_dir)
     regime_config = load_regime_config(settings.configs_dir)
     account_risk_caps = {
         cfg.id: _resolve_account_risk_caps(global_risk_caps, cfg, settings.configs_dir)
@@ -511,6 +531,14 @@ def build_container(settings: Settings | None = None) -> Container:
     normal_skill_selector = SkillSelector(
         skills=normal_skill_repository.load_all(symbols), timezone=timezone
     )
+
+    # magic -> strategy, so PositionManager can resolve the per-bot exit
+    # policy from the only bot identity an open position carries.
+    magic_to_strategy = {
+        magic_number(skill.symbol, skill.name): skill.strategy
+        for skills in normal_skill_repository.load_all(symbols).values()
+        for skill in skills
+    }
 
     news_config = load_news_config(settings.configs_dir)
     news_skills = _load_news_skills()
@@ -603,6 +631,8 @@ def build_container(settings: Settings | None = None) -> Container:
             baseline_strategies=baseline_strategies,
             risk_caps=account_risk_caps[account_cfg.id],
             volatility_config=volatility_config,
+            exit_policy_settings=exit_policy_settings,
+            magic_to_strategy=magic_to_strategy,
             regime_config=regime_config,
             spread_gate=spread_gate,
             review_every_n_trades=review_every_n_trades,
@@ -648,6 +678,8 @@ def build_container(settings: Settings | None = None) -> Container:
         news_window_service=news_window_service,
         activity_log_retention_service=activity_log_retention_service,
         wal_checkpoint_service=wal_checkpoint_service,
+        model_training=model_training,
+        training_scheduler=training_scheduler,
         accounts=accounts,
         primary_account_id=primary_account_id,
         alert_telegram_client=alert_telegram_client,
@@ -671,6 +703,8 @@ def build_account_runtime(
     baseline_strategies: list[tuple[str, Strategy]],
     risk_caps: RiskCaps,
     volatility_config: VolatilityConfig,
+    exit_policy_settings: ExitPolicySettings,
+    magic_to_strategy: Mapping[int, str],
     regime_config: RegimeConfig,
     spread_gate: SpreadGate,
     review_every_n_trades: int,
@@ -806,6 +840,8 @@ def build_account_runtime(
         reconciliation=reconciliation,
         risk_manager=risk_manager,
         volatility_config=volatility_config,
+        exit_policy_settings=exit_policy_settings,
+        magic_to_strategy=magic_to_strategy,
     )
 
     strategy_registry = StrategyRegistry()

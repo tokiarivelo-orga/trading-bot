@@ -1,0 +1,13 @@
+symbol: Step Index 200
+max_spread_points: 35
+min_rr: 1.0
+sessions:
+  - { start: "00:00", end: "23:59" }
+default_skill: normal/step_index_200
+contract_size: 100
+point: 0.1
+digits: 1
+stops_level: 0
+volume_min: 0.1
+volume_max: 50
+volume_step: 0.1

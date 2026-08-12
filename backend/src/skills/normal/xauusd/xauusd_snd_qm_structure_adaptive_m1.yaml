@@ -1,0 +1,12 @@
+name: normal/xauusd/xauusd_snd_qm_structure_adaptive_m1
+symbol: XAUUSD
+strategy: xauusd_snd_qm_structure_adaptive_m1
+risk_multiplier: 1.0
+sessions: []
+param_overrides:
+  min_confluence_score: 3
+  sl_zone_buffer_atr_mult: 0.2
+  zone_confluence_atr_radius: 1.5
+  bb_std_mult: 2.2
+  learner_half_life_samples: 1000
+htf_veto_override: null

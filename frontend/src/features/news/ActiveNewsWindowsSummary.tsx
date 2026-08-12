@@ -42,8 +42,8 @@ export function ActiveNewsWindowsSummary() {
         <span className="text-ink-muted">no active news windows</span>
       ) : (
         <ul className="mt-1 flex flex-col gap-1">
-          {windows.map((w) => (
-            <li key={`${w.event.name}-${w.window_start}`} className="flex items-center gap-1">
+          {windows.map((w, i) => (
+            <li key={`${w.event.name}-${w.window_start}-${i}`} className="flex items-center gap-1">
               <StatusBadge status={w.phase} />
               <span>{w.event.name}</span>
               <span className="text-ink-muted">({w.symbols.join(", ")})</span>

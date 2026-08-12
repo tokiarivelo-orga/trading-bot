@@ -4,7 +4,16 @@ import type { TradeHistoryOrderBy, TradeOutcome } from "@/shared/api/client";
 import type { OrderSide } from "@/shared/api/client";
 import type { GroupBy } from "./groupTrades";
 
+export function getTodayString(): string {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export interface TradeHistoryFilterState {
+  today: boolean;
   symbol: string;
   side: OrderSide | "";
   strategyVersion: string;
@@ -17,6 +26,7 @@ export interface TradeHistoryFilterState {
 }
 
 export const EMPTY_FILTERS: TradeHistoryFilterState = {
+  today: false,
   symbol: "",
   side: "",
   strategyVersion: "",
@@ -28,6 +38,16 @@ export const EMPTY_FILTERS: TradeHistoryFilterState = {
   orderDir: "desc",
 };
 
+export function getDefaultFilters(): TradeHistoryFilterState {
+  const today = getTodayString();
+  return {
+    ...EMPTY_FILTERS,
+    today: true,
+    openFrom: today,
+    openTo: today,
+  };
+}
+
 const inputCls =
   "rounded border border-line bg-bg px-2 py-1 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none";
 
@@ -36,11 +56,23 @@ export function TradeHistoryFilters({
   onChange,
   groupBy,
   onGroupByChange,
+  totalCount,
+  totalProfit,
+  onExportJson,
+  onExportCsv,
+  exporting = false,
+  exportProgress = null,
 }: {
   filters: TradeHistoryFilterState;
   onChange: (next: TradeHistoryFilterState) => void;
   groupBy: GroupBy;
   onGroupByChange: (next: GroupBy) => void;
+  totalCount?: number;
+  totalProfit?: number;
+  onExportJson?: () => void;
+  onExportCsv?: () => void;
+  exporting?: boolean;
+  exportProgress?: { loaded: number; total: number } | null;
 }) {
   function set<K extends keyof TradeHistoryFilterState>(key: K, value: TradeHistoryFilterState[K]) {
     onChange({ ...filters, [key]: value });
@@ -83,7 +115,7 @@ export function TradeHistoryFilters({
       <Field label="Strategy version">
         <input
           className={`${inputCls} w-36`}
-          placeholder="e.g. breakout_v1:v1"
+          placeholder="e.g. breakout or v1"
           value={filters.strategyVersion}
           onChange={(e) => set("strategyVersion", e.target.value)}
         />
@@ -91,17 +123,41 @@ export function TradeHistoryFilters({
       <Field label="Skill">
         <input
           className={`${inputCls} w-32`}
-          placeholder="e.g. normal/xauusd"
+          placeholder="e.g. normal or xauusd"
           value={filters.skill}
           onChange={(e) => set("skill", e.target.value)}
         />
       </Field>
+      <label className="flex cursor-pointer items-center gap-1.5 self-end pb-2 text-xs font-medium text-ink hover:text-accent">
+        <input
+          type="checkbox"
+          className="cursor-pointer accent-accent"
+          checked={filters.today}
+          onChange={(e) => {
+            if (e.target.checked) {
+              const today = getTodayString();
+              onChange({ ...filters, today: true, openFrom: today, openTo: today });
+            } else {
+              onChange({ ...filters, today: false, openFrom: "", openTo: "" });
+            }
+          }}
+        />
+        Today
+      </label>
       <Field label="Opened from">
         <input
           type="date"
           className={inputCls}
           value={filters.openFrom}
-          onChange={(e) => set("openFrom", e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            const today = getTodayString();
+            onChange({
+              ...filters,
+              openFrom: val,
+              today: val === today && filters.openTo === today,
+            });
+          }}
         />
       </Field>
       <Field label="Opened to">
@@ -109,7 +165,15 @@ export function TradeHistoryFilters({
           type="date"
           className={inputCls}
           value={filters.openTo}
-          onChange={(e) => set("openTo", e.target.value)}
+          onChange={(e) => {
+            const val = e.target.value;
+            const today = getTodayString();
+            onChange({
+              ...filters,
+              openTo: val,
+              today: filters.openFrom === today && val === today,
+            });
+          }}
         />
       </Field>
       <Field label="Sort by">
@@ -157,12 +221,62 @@ export function TradeHistoryFilters({
           Clear filters
         </button>
       )}
+      {totalCount !== undefined && totalProfit !== undefined && (
+        <div className="ml-auto flex items-center gap-2 self-center pt-1 md:pt-0">
+          <span className="text-xs font-medium text-ink-muted">
+            Period net P/L ({totalCount} trade{totalCount === 1 ? "" : "s"}):
+          </span>
+          <span
+            className={`rounded px-2 py-0.5 text-xs font-bold ${
+              totalProfit >= 0 ? "bg-ok text-white" : "bg-err text-white"
+            }`}
+            title={`Total realized profit/loss across ${totalCount} trade${totalCount === 1 ? "" : "s"} in selected period`}
+          >
+            {totalProfit >= 0 ? "+" : ""}
+            {totalProfit.toFixed(2)}
+          </span>
+        </div>
+      )}
+      {(onExportJson || onExportCsv) && (
+        <div className="flex items-center gap-1 self-center">
+          {exporting && exportProgress ? (
+            <span className="text-xs text-ink-muted">
+              Fetching {exportProgress.loaded} / {exportProgress.total}…
+            </span>
+          ) : exporting ? (
+            <span className="text-xs text-ink-muted">Preparing export…</span>
+          ) : null}
+          {onExportJson && (
+            <button
+              type="button"
+              disabled={exporting}
+              onClick={onExportJson}
+              title="Export all matching trades as JSON (training-ready, deeply nested)"
+              className="cursor-pointer rounded border border-line px-2 py-1 text-xs text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ↓ JSON
+            </button>
+          )}
+          {onExportCsv && (
+            <button
+              type="button"
+              disabled={exporting}
+              onClick={onExportCsv}
+              title="Export all matching trades as CSV (flat, one row per trade)"
+              className="cursor-pointer rounded border border-line px-2 py-1 text-xs text-ink-muted hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ↓ CSV
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 function hasActiveFilters(filters: TradeHistoryFilterState): boolean {
   return (
+    filters.today ||
     filters.symbol !== "" ||
     filters.side !== "" ||
     filters.strategyVersion !== "" ||

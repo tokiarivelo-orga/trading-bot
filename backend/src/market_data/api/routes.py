@@ -13,10 +13,15 @@ from src.market_data.api.schemas import (
     BackfillResponse,
     BrokerSymbolOut,
     BrokerSymbolPageOut,
+    CandleGapOut,
+    CandleGapScanOut,
     CandleOut,
+    GapRepairRequest,
+    GapRepairResponse,
     SymbolInfoOut,
 )
 from src.market_data.application.candle_stream import candle_message
+from src.market_data.domain.gaps import CandleGap
 from src.market_data.domain.models import MarketDataUnavailable, Timeframe
 from src.shared.api.dependencies import AccountRuntimeDep
 
@@ -105,7 +110,7 @@ async def get_symbol_info(
         "`configs/app.yaml` or `configs/symbols/`, so picking one shows its chart "
         "on demand (including live `candle_closed` WebSocket updates for as long "
         "as a client has it open) but does not add it to the automated engine's "
-        "traded universe (currently XAUUSD/XAGUSD/BTCUSD)."
+        "traded universe (currently XAUUSD/XAGUSD)."
     ),
     responses=_UNAVAILABLE,
 )
@@ -171,3 +176,97 @@ async def backfill(account: AccountRuntimeDep, body: BackfillRequest) -> Backfil
     except MarketDataUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return BackfillResponse(stored=stored)
+
+
+@router.get(
+    "/candle-gaps",
+    response_model=CandleGapScanOut,
+    summary="Find holes in stored candle history",
+    description=(
+        "Scans locally stored bars for `symbol`/`timeframe` between `start` and "
+        "`end` (both inclusive, epoch seconds UTC) and reports every stretch of "
+        "missing bars. A hole left by a stream outage or an interrupted backfill "
+        "is invisible to `GET /candles` — the chart draws straight across it, and "
+        "indicators, zone detection and `POST /backtest/run` all treat the bars "
+        "either side as adjacent when they can be hours apart, which quietly "
+        "falsifies every result computed over that window. Holes that fit inside "
+        "a normal weekend closure are flagged `weekend: true` rather than hidden, "
+        "so a caller can show them separately. Read-only — use "
+        "`POST /candle-gaps/repair` to actually fill what's missing. W1/MN always "
+        "return no gaps: their bar spacing spans calendar closures by design."
+    ),
+)
+async def get_candle_gaps(
+    account: AccountRuntimeDep,
+    symbol: str = Query(description="Trading symbol, e.g. 'XAUUSD'."),
+    start: int = Query(description="Start of the range to scan, epoch seconds UTC (inclusive)."),
+    end: int = Query(description="End of the range to scan, epoch seconds UTC (inclusive)."),
+    timeframe: TimeframeParam = Timeframe.M5,
+) -> CandleGapScanOut:
+    gaps = await account.candle_history.scan_gaps(
+        symbol,
+        timeframe,
+        datetime.fromtimestamp(start, tz=UTC),
+        datetime.fromtimestamp(end, tz=UTC),
+    )
+    return CandleGapScanOut(
+        symbol=symbol,
+        timeframe=timeframe.value,
+        start=start,
+        end=end,
+        gaps=[_gap_out(gap) for gap in gaps],
+        missing_bars=sum(gap.missing_bars for gap in gaps),
+    )
+
+
+@router.post(
+    "/candle-gaps/repair",
+    response_model=GapRepairResponse,
+    summary="Re-download missing candles to close gaps in history",
+    description=(
+        "Finds the holes `GET /candle-gaps` reports over the same range, asks the "
+        "gateway for each missing stretch (one backward-paged request per hole, "
+        "not the whole window), upserts what comes back, then rescans so the "
+        "response says which holes actually closed. This is the chart's "
+        '"fill gaps" action, and the fix for a window whose indicators or '
+        "backtest results are skewed by bars that were never downloaded. "
+        "Safe to call repeatedly — bars are overwritten in place, never "
+        "duplicated. Weekend closures are skipped unless `include_weekend` is "
+        "set. Anything still listed in `remaining` afterwards is a hole the "
+        "broker itself cannot fill (holiday, halt, symbol listed later), so "
+        "retrying will not change it."
+    ),
+    responses=_UNAVAILABLE,
+)
+async def repair_candle_gaps(
+    account: AccountRuntimeDep, body: GapRepairRequest
+) -> GapRepairResponse:
+    try:
+        report = await account.candle_history.repair_gaps(
+            body.symbol,
+            body.timeframe,
+            body.start,
+            body.end,
+            body.count,
+            body.include_weekend,
+        )
+    except MarketDataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return GapRepairResponse(
+        symbol=report.symbol,
+        timeframe=report.timeframe.value,
+        found=[_gap_out(gap) for gap in report.found],
+        repaired=[_gap_out(gap) for gap in report.repaired],
+        remaining=[_gap_out(gap) for gap in report.remaining],
+        bars_downloaded=report.bars_downloaded,
+        bars_recovered=report.bars_recovered,
+    )
+
+
+def _gap_out(gap: CandleGap) -> CandleGapOut:
+    return CandleGapOut(
+        start=int(gap.start.timestamp()),
+        end=int(gap.end.timestamp()),
+        missing_bars=gap.missing_bars,
+        weekend=gap.weekend,
+    )

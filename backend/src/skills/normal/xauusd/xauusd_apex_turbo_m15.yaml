@@ -1,0 +1,55 @@
+# APEX TURBO M15 — intraday swing rung of the turbo ladder.
+#
+# `xauusd_snd_apex_trendguard_m15`: triggers on M15 closes, zones on H1,
+# higher-timeframe zones on H4, trend votes on H1/H4/D1. Overrides are
+# byte-identical to `xauusd_apex_turbo_m1`'s, so the ladder is the only
+# variable across the turbo family (see that file for what each one does).
+#
+# One thing does change in the strategy itself at this rung: the trend EMA
+# pair drops to 13/34 from 21/55. That is not a tuning choice — a backtest
+# pre-loads only 60 days of context (`run_backtest.HISTORY_BUFFER`), which
+# is ~43 D1 bars, and a 55-span EMA needs 59 before it can vote at all. At
+# 21/55 the D1 rung would sit at 0 for part of every replay while voting
+# normally live, and the replay would be measuring a different bot than the
+# one that trades.
+#
+# ── Measured: XAUUSD 2026-03..2026-08, real engine, broker realism on,
+#    $10,000 start, backtest risk (risk_multiplier below is NOT applied by
+#    a backtest — scale the drawdown by it yourself) ──
+#
+#            trades    PF   max DD   end balance   long/short
+#   turbo       710  2.26    6.76%       $13,191      220/490
+#   base        202  5.19    1.61%       $11,312       60/142
+#
+# ~6.5 positions a trading day. Note the drawdown: 6.76% is the worst in
+# the whole Apex family and 4x the flagship configuration's on the same
+# bars, for +$1,879 more. If that number is uncomfortable, run the base
+# configuration on this timeframe instead of lowering risk on this one —
+# the drawdown is coming from the loosened gates, not from position size.
+#
+# Outcome mix: 554 of 710 closes are ~+0.20R secure-base trailing scratches,
+# 63 are real take-profits, 92 are losses. So the 86.9% win rate is an
+# artifact of the engine's trailing, not strategy edge — read PF, avg R
+# (0.154) and drawdown. Those scratch exits are stop fills: exact in a
+# replay, slipping live. Expect live below backtest.
+#
+# Not out-of-sample: the family's thresholds were tuned on 2026-08-05,
+# which sits inside this window.
+name: normal/xauusd/xauusd_apex_turbo_m15
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_m15
+risk_multiplier: 0.8
+sessions: []
+param_overrides:
+  confirm_mode: "off"
+  max_signals_per_bar: 2
+  max_touch_episode: 20
+  max_entry_depth: 1.00
+  zone_height_atr_min: 0.20
+  zone_height_atr_max: 2.40
+  min_impulse_atr: 0.55
+  allow_counter_trend: true
+  zri_min: 0.35
+  neutral_min_score: 0.0
+  tp2_min_rr: 1.8
+htf_veto_override: null

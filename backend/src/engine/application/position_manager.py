@@ -30,6 +30,19 @@ All rules only ever tighten SL (never loosen it) — see `_improves` — so
 whichever rule's candidate is currently more protective wins, and no
 rule fights a tighter level already set by another.
 
+A fourth rule (`exit_policy_config`) attacks give-back specifically:
+
+  - Give-back trail: once a position's peak unrealized profit clears
+    `arm_r`, SL ratchets to `keep_fraction` of that peak, so a winner that
+    reverses books part of what it earned instead of decaying back to the
+    +0.2R secure level. 89.5% of losing live XAUUSD trades were in profit
+    first, giving back 3,579R in aggregate — see
+    `engine/domain/exit_policy.py` for the full measurement and for why
+    this is a state rule rather than a model prediction.
+
+`exit_policy_config=None` disables it and reproduces pre-existing behavior
+exactly.
+
 When `volatility_config` is supplied, a fourth, bot-agnostic set of rules
 reacts to the symbol's current volatility regime (`engine/domain/volatility.py`):
 an EXTREME regime while losing closes the position outright (bypassing the
@@ -44,6 +57,7 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Mapping
 from datetime import UTC, datetime
 
 import numpy as np
@@ -58,6 +72,12 @@ from src.broker.domain.trading import (
     pending_order_triggered,
 )
 from src.engine.application.risk_manager import RiskManager
+from src.engine.domain.exit_policy import (
+    ExitAction,
+    ExitPolicyConfig,
+    ExitPolicySettings,
+    decide_exit,
+)
 from src.engine.domain.volatility import (
     VolatilityConfig,
     VolatilityRegime,
@@ -66,6 +86,7 @@ from src.engine.domain.volatility import (
 from src.engine.domain.zone_detection import DEFAULT_ATR_PERIOD, Base, BaseKind, atr, detect_bases
 from src.market_data.domain.models import MarketDataUnavailable, SymbolInfo, Timeframe
 from src.market_data.ports.market_data import MarketDataPort
+from src.strategies.domain.models import ExitActionKind, ExitDecision
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +108,9 @@ class PositionManager:
         secure_lookback_bars: int = DEFAULT_SECURE_LOOKBACK_BARS,
         secure_buffer_r_mult: float = DEFAULT_SECURE_BUFFER_R_MULT,
         volatility_config: VolatilityConfig | None = None,
+        exit_policy_config: ExitPolicyConfig | None = None,
+        exit_policy_settings: ExitPolicySettings | None = None,
+        magic_to_strategy: Mapping[int, str] | None = None,
     ) -> None:
         self._order_service = order_service
         self._market_data = market_data
@@ -97,10 +121,22 @@ class PositionManager:
         self._secure_lookback_bars = secure_lookback_bars
         self._secure_buffer_r_mult = secure_buffer_r_mult
         self._volatility_config = volatility_config
+        self._exit_policy_config = exit_policy_config
+        # Per-bot resolution. `magic` is the only bot identity an open
+        # position carries (`magic_number(symbol, skill_name)`), so the
+        # container hands over the reverse map it can build from the loaded
+        # skills. Absent either piece, every position falls back to
+        # `exit_policy_config` — i.e. the previous global behaviour.
+        self._exit_policy_settings = exit_policy_settings
+        self._magic_to_strategy = dict(magic_to_strategy or {})
         self._volatility_guard_enabled = True
         self._candles_since_open: dict[int, int] = {}
         # ticket -> best favorable mark seen since entry (max for BUY, min
-        # for SELL), used only by the HIGH-regime chandelier trailing rule.
+        # for SELL). Updated unconditionally on every candle close (see
+        # `_manage`), because the give-back rule needs a true high-water mark
+        # from entry onward — it used to be populated only once the
+        # HIGH-regime chandelier rule first fired, which would have made the
+        # give-back peak silently wrong.
         self._trade_extreme_favorable: dict[int, float] = {}
         # symbol -> {ticket: order}, as of the last candle close — kept so a
         # vanished ticket's side/volume is still known when reconciling.
@@ -119,6 +155,53 @@ class PositionManager:
         see `engine/api/routes.py`."""
         self._volatility_guard_enabled = enabled
         logger.info("position manager: volatility guard enabled=%s", enabled)
+
+    async def apply_strategy_action(self, position: Position, action: ExitDecision) -> None:
+        """Executes a strategy's own `ExitDecision` on its own open
+        `position` — the strategy-facing counterpart to `_manage`'s
+        bot-agnostic rules above, called by `TradeLoop` right after
+        `strategy.evaluate()` returns one. Scoped to thesis-invalidation
+        (the strategy telling the engine "the setup this trade was built on
+        broke"), never a substitute for the generic profit-protection rules
+        `_manage` already runs on every position regardless of which bot
+        opened it — those still apply on top of whatever this leaves
+        behind.
+
+        `CLOSE` always executes. `BREAKEVEN` is still gated through
+        `_improves` so a strategy can never *loosen* a stop `_manage` (or an
+        earlier strategy action) already tightened past entry price — the
+        same never-loosen invariant every other SL-tightening rule in this
+        class obeys."""
+        direction = 1 if position.side is Side.BUY else -1
+        if action.action is ExitActionKind.CLOSE:
+            await self._order_service.close_position(
+                position.ticket, reason=action.reason or "strategy exit"
+            )
+            logger.info(
+                "strategy exit: ticket=%d %s closed — %s",
+                position.ticket,
+                position.symbol,
+                action.reason or "strategy exit",
+            )
+            self._candles_since_open.pop(position.ticket, None)
+            self._trade_extreme_favorable.pop(position.ticket, None)
+            return
+        if action.action is ExitActionKind.BREAKEVEN:
+            candidate = position.open_price
+            if position.sl is None or self._improves(candidate, position.sl, direction):
+                await self._order_service.modify_position(
+                    position.ticket,
+                    sl=candidate,
+                    tp=position.tp,
+                    reason=action.reason or "strategy breakeven",
+                )
+                logger.info(
+                    "strategy breakeven: ticket=%d %s sl moved to %.5f — %s",
+                    position.ticket,
+                    position.symbol,
+                    candidate,
+                    action.reason or "strategy breakeven",
+                )
 
     async def on_candle_closed(self, symbol: str) -> None:
         positions = await self._order_service.get_positions(symbol)
@@ -301,6 +384,23 @@ class PositionManager:
             return False
         return (candidate - current_sl) * direction > 0
 
+    def _exit_policy_for(self, position: Position) -> ExitPolicyConfig | None:
+        """The give-back policy this position's bot should run under.
+
+        Per-bot because the measurement demands it: replayed over their own
+        real M1 paths, the policy helped 8 bots and hurt 7 — it rescues bots
+        that are bleeding (+119.0R on `xauusd_snd_qm_structure_m1`) and taxes
+        bots that are working (-39.5R on `..._adaptive_m1`). A position whose
+        `magic` is unknown (manual trade, retired bot) gets the default, which
+        is the safe direction: unknown means "treat like everything else",
+        never "silently exempt".
+        """
+        if self._exit_policy_settings is None:
+            return self._exit_policy_config
+        return self._exit_policy_settings.resolve(
+            self._magic_to_strategy.get(position.magic)
+        )
+
     async def _manage(
         self,
         position: Position,
@@ -315,6 +415,19 @@ class PositionManager:
         direction = 1 if position.side is Side.BUY else -1
         risk = abs(position.open_price - position.sl)
         progress = (mark - position.open_price) * direction
+
+        # High-water mark, tracked for every position on every candle close
+        # regardless of which rules are enabled — the give-back rule below
+        # and the chandelier rule both read it, and a peak that only starts
+        # being recorded when some other rule first fires is not a peak.
+        favorable = self._trade_extreme_favorable.get(position.ticket)
+        if favorable is None:
+            favorable = mark
+        elif position.side is Side.BUY:
+            favorable = max(favorable, mark)
+        else:
+            favorable = min(favorable, mark)
+        self._trade_extreme_favorable[position.ticket] = favorable
 
         volatility_active = (
             self._volatility_config is not None
@@ -424,20 +537,62 @@ class PositionManager:
             and self._volatility_config is not None
             and progress >= self._volatility_config.chandelier_min_profit_r * risk
         ):
-            favorable = self._trade_extreme_favorable.get(position.ticket)
-            if favorable is None:
-                favorable = mark
-            elif position.side is Side.BUY:
-                favorable = max(favorable, mark)
-            else:
-                favorable = min(favorable, mark)
-            self._trade_extreme_favorable[position.ticket] = favorable
             atr_distance = self._volatility_config.chandelier_atr_mult * atr_value
             candidate = favorable - direction * atr_distance
             floor = target_sl if target_sl is not None else position.sl
             if self._improves(candidate, floor, direction):
                 target_sl = candidate
                 target_sl_reason = "volatility guard: HIGH-regime chandelier trail"
+
+        # Rule 6 (give-back): protect profit that was already earned. Runs
+        # last so it sees whatever the rules above proposed and can only
+        # tighten further — and it can also decide the position should be
+        # closed outright, which no SL candidate can express.
+        exit_policy = self._exit_policy_for(position)
+        if exit_policy is not None and risk > 0:
+            decision = decide_exit(
+                is_buy=position.side is Side.BUY,
+                entry_price=position.open_price,
+                current_sl=target_sl if target_sl is not None else position.sl,
+                mark=mark,
+                extreme_favorable=favorable,
+                risk=risk,
+                take_profit=position.tp,
+                config=exit_policy,
+            )
+            if decision.action is ExitAction.CLOSE:
+                await self._order_service.close_position(
+                    position.ticket, reason=decision.reason
+                )
+                logger.info(
+                    "give-back exit: ticket=%d %s closed — %s",
+                    position.ticket,
+                    position.symbol,
+                    decision.reason,
+                )
+                self._candles_since_open.pop(position.ticket, None)
+                self._trade_extreme_favorable.pop(position.ticket, None)
+                return
+            if decision.action is ExitAction.TIGHTEN_SL and decision.stop_price is not None:
+                floor = target_sl if target_sl is not None else position.sl
+                if self._improves(decision.stop_price, floor, direction):
+                    target_sl = decision.stop_price
+                    target_sl_reason = decision.reason
+            elif decision.action is ExitAction.REDUCE_TP and decision.take_profit is not None:
+                await self._order_service.modify_position(
+                    position.ticket,
+                    sl=target_sl if target_sl is not None else position.sl,
+                    tp=decision.take_profit,
+                    reason=decision.reason,
+                )
+                logger.info(
+                    "take-profit reduced: ticket=%d %s tp -> %.5f (%s)",
+                    position.ticket,
+                    position.symbol,
+                    decision.take_profit,
+                    decision.reason,
+                )
+                return
 
         if target_sl is not None:
             await self._order_service.modify_position(

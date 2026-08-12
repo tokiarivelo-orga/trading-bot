@@ -76,14 +76,8 @@ def test_no_signal_with_insufficient_history():
     assert signal is None
 
 
-def test_spec_covers_all_five_symbols_and_carries_no_confirmation_timeframes():
+def test_spec_covers_base_symbols_and_carries_no_confirmation_timeframes():
     spec = ScalpBollingerReversionV1().spec
-    assert set(spec.symbols) == {
-        "XAUUSD",
-        "XAGUSD",
-        "BTCUSD",
-        "Boom 1000 Index",
-        "Volatility 75 Index",
-    }
+    assert spec.symbols == ()  # empty = accepts all dynamically configured symbols
     assert spec.entry_timeframe == "M5"
     assert spec.confirmation_timeframes == ()

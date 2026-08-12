@@ -59,7 +59,15 @@ from src.shared.metrics.registry import (
     record_signal_outcome,
 )
 from src.skills.ports.skill_selector import SkillDecision, SkillSelectorPort
-from src.strategies.domain.models import Direction, MarketContext, Signal, Strategy
+from src.strategies.domain.models import (
+    Direction,
+    ExitActionKind,
+    ExitDecision,
+    MarketContext,
+    PositionSnapshot,
+    Signal,
+    Strategy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +354,7 @@ class TradeEngine:
                 else None
             )
             if strategy is not None:
-                if symbol not in strategy.spec.symbols:
+                if strategy.spec.symbols and symbol not in strategy.spec.symbols:
                     continue
                 if strategy.spec.entry_timeframe != timeframe:
                     continue  # this bot enters on a different timeframe's closes
@@ -517,15 +525,52 @@ class TradeEngine:
         # on the same symbol just opened.
         open_positions = await self._order_service.get_positions()
 
+        # This bot's own open position on `symbol` (matched by magic, same
+        # rule `_close_opposite_position` uses), handed to the strategy via
+        # `ctx.own_position` so it can reason about an in-flight trade —
+        # e.g. to emit an `ExitDecision`. `None`/unchanged `ctx` when there
+        # isn't one, so a strategy that never reads this field sees exactly
+        # what it always has.
+        own_position = next(
+            (p for p in open_positions if p.symbol == symbol and p.magic == decision.magic),
+            None,
+        )
+        bot_ctx = (
+            replace(
+                ctx,
+                own_position=PositionSnapshot(
+                    direction=Direction.BUY if own_position.side is Side.BUY else Direction.SELL,
+                    entry_price=own_position.open_price,
+                    sl=own_position.sl,
+                    tp=own_position.tp,
+                    opened_at=own_position.open_time,
+                ),
+            )
+            if own_position is not None
+            else ctx
+        )
+
         # Evaluated ahead of the pretrade gate (unlike previously) so a
         # `close_on_opposite_signal` strategy can free up its own slot below
         # before the max-open-positions cap is checked against the count.
-        signal_res = strategy.evaluate(ctx)
+        signal_res = strategy.evaluate(bot_ctx)
         if signal_res is None:
             return balance
-        signals: tuple[Signal, ...] = (
-            tuple(signal_res) if isinstance(signal_res, (list, tuple)) else (signal_res,)
-        )
+        raw = tuple(signal_res) if isinstance(signal_res, (list, tuple)) else (signal_res,)
+        exit_decisions = tuple(item for item in raw if isinstance(item, ExitDecision))
+        signals: tuple[Signal, ...] = tuple(item for item in raw if isinstance(item, Signal))
+
+        if exit_decisions:
+            open_positions, closed = await self._apply_strategy_exit_decisions(
+                symbol, decision, exit_decisions, open_positions
+            )
+            if closed:
+                # Same reasoning as the `close_on_opposite_signal` refetch
+                # below: a realized close is the only thing that changes
+                # account balance mid-candle, so downstream sizing (this bot's
+                # or a later one's) must see the post-close value.
+                balance = await self._current_balance()
+
         if not signals:
             return balance
 
@@ -886,6 +931,39 @@ class TradeEngine:
                 continue  # spread/RR gate already logged the veto inside order_service
             self._risk_manager.record_trade_opened(now)
         return balance
+
+    async def _apply_strategy_exit_decisions(
+        self,
+        symbol: str,
+        decision: SkillDecision,
+        exit_decisions: tuple[ExitDecision, ...],
+        open_positions: list[Position],
+    ) -> tuple[list[Position], bool]:
+        """Routes every `ExitDecision` this bot's `evaluate()` just returned
+        to `PositionManager.apply_strategy_action`, against every one of
+        this bot's own open positions on `symbol` (matched by `magic`, same
+        rule `_close_opposite_position` uses — usually a single position,
+        but a multi-TP-leg bot can have more than one open at once).
+        Mirrors `_close_opposite_position`'s return contract: `open_positions`
+        has any closed ticket removed so the pretrade gate below sees the
+        freed slot immediately, and `closed` tells the caller whether
+        account balance needs re-fetching."""
+        own_positions = [
+            p for p in open_positions if p.symbol == symbol and p.magic == decision.magic
+        ]
+        if not own_positions:
+            return open_positions, False
+        closed_tickets: set[int] = set()
+        for action in exit_decisions:
+            for position in own_positions:
+                if position.ticket in closed_tickets:
+                    continue
+                await self._position_manager.apply_strategy_action(position, action)
+                if action.action is ExitActionKind.CLOSE:
+                    closed_tickets.add(position.ticket)
+        if not closed_tickets:
+            return open_positions, False
+        return [p for p in open_positions if p.ticket not in closed_tickets], True
 
     async def _close_opposite_position(
         self,

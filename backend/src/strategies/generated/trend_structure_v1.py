@@ -79,7 +79,7 @@ class TrendStructureV1:
         self.spec = StrategySpec(
             name="trend_structure_v1",
             version=1,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=(),
             params={"pivot_wing": PIVOT_WING, "tp_rr": TP_RR},

@@ -333,6 +333,9 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
   // indirection is still needed even with `paintUpTo` as the real,
   // stable-identity export.
   const renderRef = useRef<() => void>(() => {});
+  // Same ref-per-effect-run indirection as `renderRef`, for the same reason:
+  // `reloadWindow` closes over the current run's `cancelled`/abort controller.
+  const reloadRef = useRef<() => Promise<void>>(async () => {});
 
   const [symbolInfo, setSymbolInfo] = useState<SymbolInfo | null>(null);
   const [spreadPoints, setSpreadPoints] = useState<number | null>(null);
@@ -451,8 +454,56 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
         ?.setData(buildFutureWhitespace(bars, timeframe));
       scheduleOverlayRecompute();
       setTimeout(() => {
-        if (!cancelled) bumpLines((t) => t + 1);
+        if (!cancelled) requestAnimationFrame(() => bumpLines((t) => t + 1));
       }, 50);
+    }
+
+    // Re-fetches the *currently loaded* time window from scratch and swaps it
+    // in, for when the bars on screen are known to be wrong rather than
+    // merely incomplete — today that means after `useCandleGaps` has had the
+    // backend re-download missing history (`POST /market-data/candle-gaps/
+    // repair`), where the window keeps its time span but gains bars in the
+    // middle. Deliberately not `loadMore` (which only ever prepends older
+    // pages) and not `patchLatestHistoryOnReconnect` (which only replaces the
+    // newest `CANDLE_COUNT`).
+    //
+    // Filling a hole shifts every bar to its right by the number of recovered
+    // bars, so the visible *logical* range no longer points at the same bars.
+    // Snapshotting and restoring the visible *time* range instead keeps the
+    // user looking at the same moment in the market, and the replay cursor is
+    // re-resolved by time for the same reason.
+    async function reloadWindow() {
+      const bars = candlesRef.current;
+      if (bars.length === 0) return;
+      const from = bars[0].time;
+      const to = bars[bars.length - 1].time;
+      const cursorTime = replayActiveRef.current
+        ? bars[replayCursorIndexRef.current]?.time
+        : undefined;
+      const timeRange = chart?.timeScale().getVisibleRange();
+      const fresh = await fetchCandlesForPeriod(
+        account,
+        symbol,
+        timeframe,
+        from,
+        to,
+        undefined,
+        initialLoadController.signal,
+      );
+      if (cancelled || fresh.length === 0) return;
+      candlesRef.current = fresh;
+      if (cursorTime !== undefined) {
+        const index = fresh.findIndex((c) => c.time >= cursorTime);
+        const resolved = index === -1 ? fresh.length - 1 : index;
+        replayCursorIndexRef.current = resolved;
+        setReplayCursorIndex(resolved);
+      }
+      render();
+      if (timeRange) {
+        requestAnimationFrame(() => {
+          if (!cancelled) chart?.timeScale().setVisibleRange(timeRange);
+        });
+      }
     }
 
     // Fetches the next page of older bars once the user pans near the left
@@ -588,6 +639,7 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
     }
 
     renderRef.current = render;
+    reloadRef.current = reloadWindow;
 
     resolveInitialCandles()
       .then((candles) => {
@@ -814,13 +866,15 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
       SPREAD_POLL_MS,
       () => getSymbolInfo(accountId, symbol),
       (info, error) => {
-        if (error || !info) {
-          setSymbolInfo(null);
-          setSpreadPoints(null);
-        } else {
-          setSymbolInfo(info);
-          setSpreadPoints(info.spread_points);
-        }
+        requestAnimationFrame(() => {
+          if (error || !info) {
+            setSymbolInfo(null);
+            setSpreadPoints(null);
+          } else {
+            setSymbolInfo(info);
+            setSpreadPoints(info.spread_points);
+          }
+        });
       },
     );
     return unsubscribe;
@@ -867,22 +921,24 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
           phase: w.phase,
         });
       }
-      setNewsBands((prev) => {
-        if (prev.length === 0 && bands.length === 0) return prev;
-        if (
-          prev.length === bands.length &&
-          prev.every(
-            (b, i) =>
-              b.key === bands[i].key &&
-              b.left === bands[i].left &&
-              b.width === bands[i].width &&
-              b.label === bands[i].label &&
-              b.phase === bands[i].phase,
-          )
-        ) {
-          return prev;
-        }
-        return bands;
+      requestAnimationFrame(() => {
+        setNewsBands((prev) => {
+          if (prev.length === 0 && bands.length === 0) return prev;
+          if (
+            prev.length === bands.length &&
+            prev.every(
+              (b, i) =>
+                b.key === bands[i].key &&
+                b.left === bands[i].left &&
+                b.width === bands[i].width &&
+                b.label === bands[i].label &&
+                b.phase === bands[i].phase,
+            )
+          ) {
+            return prev;
+          }
+          return bands;
+        });
       });
     }
 
@@ -930,9 +986,13 @@ export function useCandleData(params: UseCandleDataParams): ChartRenderControlle
     renderRef.current();
   }, []);
 
+  /** Stable wrapper around `reloadRef`, same rationale as `paintUpTo`. */
+  const reloadWindow = useCallback(() => reloadRef.current(), []);
+
   return {
     candlesRef,
     paintUpTo,
+    reloadWindow,
     symbolInfo,
     spreadPoints,
     error,

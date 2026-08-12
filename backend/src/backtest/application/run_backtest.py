@@ -67,6 +67,10 @@ from src.strategies.generated.breakout_v2 import BreakoutV2
 from src.strategies.generated.mean_reversion_v1 import MeanReversionV1
 from src.strategies.generated.trend_structure_v1 import TrendStructureV1
 from src.strategies.generated.trend_structure_v2 import TrendStructureV2
+try:
+    from src.strategies.generated.smc_dl_m5_v1 import SmcDlM5V1
+except ImportError:
+    SmcDlM5V1 = None  # torch not installed — skip DL strategy
 from src.strategies.registry import StrategyRegistry
 
 logger = logging.getLogger(__name__)
@@ -183,7 +187,7 @@ async def run_backtest(
     strategy = registry.get(strategy_name)
     if strategy is None:
         raise ValueError(f"unknown strategy: {strategy_name!r}")
-    if symbol not in strategy.spec.symbols:
+    if strategy.spec.symbols and symbol not in strategy.spec.symbols:
         raise ValueError(f"strategy {strategy_name!r} does not trade {symbol}")
 
     # Policy fields (max_spread_points/min_rr) are optional — a symbol with no
@@ -549,6 +553,20 @@ def _default_registry(database_url: str) -> StrategyRegistry:
     registry.register(trend_structure_v2.spec.name, trend_structure_v2)
     mean_reversion_v1 = MeanReversionV1()
     registry.register(mean_reversion_v1.spec.name, mean_reversion_v1)
+    if SmcDlM5V1 is not None:
+        try:
+            smc_dl = SmcDlM5V1()
+            registry.register(smc_dl.spec.name, smc_dl)
+        except Exception:
+            logger.warning("SmcDlM5V1 skipped (model weights missing or torch error)")
+            
+    try:
+        from src.strategies.generated.smc_dl_m5_step200 import SmcDlM5Step200
+        smc_dl_step200 = SmcDlM5Step200()
+        registry.register(smc_dl_step200.spec.name, smc_dl_step200)
+    except Exception:
+        logger.warning("SmcDlM5Step200 skipped")
+        
     session_factory = make_session_factory(database_url)
     strategy_versions = StrategyVersionService(
         repository=StrategyVersionRepository(session_factory),

@@ -195,6 +195,10 @@ walk-forward-backtest: ## Run a walk-forward backtest (independent out-of-sample
 		{ echo 'usage: make walk-forward-backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-12 [fold_months=1]'; exit 1; }
 	cd backend && uv run python -m src.backtest.walk_forward_cli "$(strategy)" "$(symbol)" "$(period)" $(fold_months)
 
+.PHONY: train-dl
+train-dl: ## Entraînement automatique du modèle Deep Learning (SMC): make train-dl
+	cd backend && uv run python scripts/run_smc_dl_loop.py
+
 .PHONY: seed-indicators
 seed-indicators: ## Seed the 15 PoB pattern/confirmation indicators into the indicator DB (safe to re-run)
 	cd backend && uv run python -m scripts.seed_pob_indicators
@@ -396,3 +400,7 @@ clean: ## Remove caches and build artifacts (keeps .venv and node_modules)
 .PHONY: clean-all
 clean-all: clean ## clean + remove .venv and node_modules (full reinstall needed after)
 	rm -rf $(BACKEND_DIR)/.venv $(GATEWAY_DIR)/.venv $(FRONTEND_DIR)/node_modules
+
+.PHONY: export-dataset
+export-dataset:
+	uv run python backend/scripts/export_live_dataset.py --symbol="$(symbol)"

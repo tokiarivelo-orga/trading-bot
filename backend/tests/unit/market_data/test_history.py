@@ -40,9 +40,7 @@ class FakePagingMarketData:
         self.calls.append(before)
         if before is None:
             return self._bars[-count:]
-        cutoff = next(
-            (i for i, c in enumerate(self._bars) if c.time >= before), len(self._bars)
-        )
+        cutoff = next((i for i, c in enumerate(self._bars) if c.time >= before), len(self._bars))
         return self._bars[:cutoff][-count:]
 
     async def get_tick(self, symbol):
@@ -60,6 +58,13 @@ class FakeCandleRepository:
     def upsert_many(self, candles, account_id: str = "default") -> int:
         candles = list(candles)
         self.stored.extend(candles)
+        # Merge into the readable history the same way the real repository's
+        # upsert does (overwrite in place, keyed on bar open) — `repair_gaps`
+        # rescans right after downloading, so a fake whose reads ignore its
+        # own writes would report every repaired hole as still missing.
+        merged = {c.time: c for c in self._bars}
+        merged.update({c.time: c for c in candles})
+        self._bars = [merged[time] for time in sorted(merged)]
         return len(candles)
 
     def get_latest(self, symbol, timeframe, count, account_id: str = "default") -> list[Candle]:
@@ -68,10 +73,11 @@ class FakeCandleRepository:
     def get_before(
         self, symbol, timeframe, before, count, account_id: str = "default"
     ) -> list[Candle]:
-        cutoff = next(
-            (i for i, c in enumerate(self._bars) if c.time >= before), len(self._bars)
-        )
+        cutoff = next((i for i, c in enumerate(self._bars) if c.time >= before), len(self._bars))
         return self._bars[:cutoff][-count:]
+
+    def get_range(self, symbol, timeframe, start, end, account_id: str = "default") -> list[Candle]:
+        return [c for c in self._bars if start <= c.time < end]
 
 
 class FakeUnavailableMarketData:
@@ -362,9 +368,173 @@ async def test_backfill_with_start_stops_when_broker_history_runs_out():
 
     # Requested start is far earlier than any real history — pagination must
     # stop once the broker returns a short (final) page, not loop forever.
-    stored = await service.backfill(
-        "XAUUSD", Timeframe.M5, 100, start=origin - timedelta(days=365)
-    )
+    stored = await service.backfill("XAUUSD", Timeframe.M5, 100, start=origin - timedelta(days=365))
 
     assert stored == 50
     assert len(market_data.calls) == 1
+
+
+# ── Gap scanning & repair (chart's "fill gaps" button) ──────────────────────
+#
+# A hole in stored history is invisible to get_latest/get_before, so the chart
+# draws straight across it and every indicator/backtest over that window
+# treats bars hours apart as adjacent. These cover finding those holes and
+# closing them from the broker.
+
+
+def holed_history(
+    *, origin: datetime, before: int, missing: int, after: int
+) -> tuple[list[Candle], list[Candle]]:
+    """`(full, holed)` M5 histories — `holed` is `full` minus `missing` bars
+    starting at index `before`, i.e. what a stream outage leaves behind."""
+    full = make_bars(before + missing + after, start=origin)
+    return full, full[:before] + full[before + missing :]
+
+
+async def test_scan_gaps_reports_a_hole_between_stored_bars():
+    origin = datetime(2026, 1, 5, tzinfo=UTC)  # a Monday
+    full, holed = holed_history(origin=origin, before=10, missing=10, after=10)
+    service = CandleHistoryService(FakeUnavailableMarketData(), FakeCandleRepository(holed))
+
+    gaps = await service.scan_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert len(gaps) == 1
+    assert gaps[0].missing_bars == 10
+    assert gaps[0].start == full[10].time
+    assert gaps[0].end == full[20].time
+    assert gaps[0].weekend is False
+
+
+async def test_scan_gaps_reports_the_whole_range_when_nothing_is_stored():
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full = make_bars(30, start=origin)
+    service = CandleHistoryService(FakeUnavailableMarketData(), FakeCandleRepository([]))
+
+    gaps = await service.scan_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert [gap.missing_bars for gap in gaps] == [29]
+
+
+async def test_scan_gaps_reports_history_missing_before_the_range_starts():
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full = make_bars(30, start=origin)
+    service = CandleHistoryService(FakeUnavailableMarketData(), FakeCandleRepository(full[10:]))
+
+    gaps = await service.scan_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert [gap.missing_bars for gap in gaps] == [10]
+    assert gaps[0].start == full[0].time
+
+
+async def test_scan_gaps_tolerates_the_db_trailing_the_live_stream_by_a_bar():
+    """The chart's newest bar is the forming one; the stream persists it on
+    its own ~1/minute cadence, so a bar of lag is normal and must not light
+    up a permanent "gaps found" badge."""
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full = make_bars(30, start=origin)
+    service = CandleHistoryService(FakeUnavailableMarketData(), FakeCandleRepository(full[:-1]))
+
+    assert await service.scan_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time) == []
+
+
+async def test_scan_gaps_without_a_repository_is_empty():
+    service = CandleHistoryService(FakeUnavailableMarketData(), repository=None)
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+
+    assert await service.scan_gaps("XAUUSD", Timeframe.M5, origin, origin + timedelta(days=1)) == []
+
+
+async def test_repair_gaps_downloads_the_hole_and_closes_it():
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full, holed = holed_history(origin=origin, before=10, missing=10, after=10)
+    market_data = FakePagingMarketData(full)
+    service = CandleHistoryService(market_data, FakeCandleRepository(holed))
+
+    report = await service.repair_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert len(report.found) == 1
+    assert len(report.repaired) == 1
+    assert report.remaining == []
+    assert report.bars_recovered == 10
+    assert report.bars_downloaded > 0
+
+
+async def test_repair_gaps_asks_only_for_the_missing_stretch():
+    """One backward-paged request per hole, cursored at the hole's end — not
+    a re-download of the whole scanned window."""
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full, holed = holed_history(origin=origin, before=10, missing=10, after=10)
+    market_data = FakePagingMarketData(full)
+    service = CandleHistoryService(market_data, FakeCandleRepository(holed))
+
+    await service.repair_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert market_data.calls == [full[20].time]
+
+
+async def test_repair_gaps_reports_what_the_broker_cannot_fill():
+    """The broker's own history has the same hole — a holiday, a halt, or a
+    symbol listed later. Retrying will never fix it, so say so instead of
+    inviting another click."""
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    _full, holed = holed_history(origin=origin, before=10, missing=10, after=10)
+    service = CandleHistoryService(FakePagingMarketData(holed), FakeCandleRepository(holed))
+
+    report = await service.repair_gaps("XAUUSD", Timeframe.M5, holed[0].time, holed[-1].time)
+
+    assert report.repaired == []
+    assert len(report.remaining) == 1
+    assert report.bars_recovered == 0
+
+
+async def test_repair_gaps_skips_weekend_closures_by_default():
+    """Friday 20:59 to Sunday 22:00 on M1: the broker never had those bars,
+    so asking for them burns a Wine/MT5 round trip for nothing."""
+    friday = datetime(2026, 7, 17, 20, 59, tzinfo=UTC)
+    stored = [
+        make_bars(1, start=friday, timeframe=Timeframe.M1)[0],
+        make_bars(1, start=friday + timedelta(days=2, hours=1, minutes=1), timeframe=Timeframe.M1)[
+            0
+        ],
+    ]
+    market_data = FakePagingMarketData(stored)
+    service = CandleHistoryService(market_data, FakeCandleRepository(stored))
+
+    report = await service.repair_gaps("XAUUSD", Timeframe.M1, stored[0].time, stored[-1].time)
+
+    assert [gap.weekend for gap in report.found] == [True]
+    assert report.repaired == []
+    assert report.remaining == []
+    assert market_data.calls == []
+
+
+async def test_repair_gaps_asks_for_weekend_holes_when_told_to():
+    """Crypto and synthetic indices really do trade through the weekend."""
+    friday = datetime(2026, 7, 17, 20, 59, tzinfo=UTC)
+    stored = [
+        make_bars(1, start=friday, timeframe=Timeframe.M1)[0],
+        make_bars(1, start=friday + timedelta(days=2, hours=1, minutes=1), timeframe=Timeframe.M1)[
+            0
+        ],
+    ]
+    market_data = FakePagingMarketData(stored)
+    service = CandleHistoryService(market_data, FakeCandleRepository(stored))
+
+    await service.repair_gaps(
+        "BTCUSD", Timeframe.M1, stored[0].time, stored[-1].time, include_weekend=True
+    )
+
+    assert market_data.calls == [stored[-1].time]
+
+
+async def test_repair_gaps_leaves_a_healthy_range_alone():
+    origin = datetime(2026, 1, 5, tzinfo=UTC)
+    full = make_bars(30, start=origin)
+    market_data = FakePagingMarketData(full)
+    service = CandleHistoryService(market_data, FakeCandleRepository(full))
+
+    report = await service.repair_gaps("XAUUSD", Timeframe.M5, full[0].time, full[-1].time)
+
+    assert report.found == []
+    assert report.bars_downloaded == 0
+    assert market_data.calls == []

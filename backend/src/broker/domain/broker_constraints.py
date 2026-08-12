@@ -11,9 +11,9 @@ retcode 10016 on every single live order.
 Two rules matter for entries:
 
 * **`stops_level`** — the minimum distance, in points, that SL and TP must
-  keep from the current price. Volatility 75 Index reports `stops_level`
-  such that a stop must sit at least 107.70 price units away; an M1 scalp
-  risking 30-70 units is rejected outright, every time.
+  keep from the current price. Some synthetic indices (e.g. Deriv VIX75) report
+  `stops_level` such that a stop must sit at least 107.70 price units away; an
+  M1 scalp risking 30-70 units is rejected outright, every time.
 * **volume granularity** — `volume_min` / `volume_step` / `volume_max`. MT5
   rounds nothing for you; a 0.037-lot request on a 0.01-step symbol is
   refused, and a lot that rounds below `volume_min` cannot be sent at all.
@@ -98,9 +98,9 @@ def min_stop_distance(stops_level: int, point: float) -> float:
     """The minimum SL/TP distance from price, in price units.
 
     MT5 reports `stops_level` in *points*, so it only becomes a price
-    distance once multiplied by the symbol's `point`. For Volatility 75 Index
-    (`point` 0.01, `stops_level` 10770) this is 107.70 price units — the
-    figure that silently killed the M1 scalp fleet."""
+    distance once multiplied by the symbol's `point`. For a synthetic index
+    with `point` 0.01 and `stops_level` 10770, this is 107.70 price units —
+    the figure that silently killed the M1 scalp fleet."""
     return max(0, stops_level) * point
 
 

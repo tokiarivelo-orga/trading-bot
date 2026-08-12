@@ -4,7 +4,7 @@ Built after `trend_structure_v1`/`v2` (which buy a fresh swing high / sell a
 fresh swing low, i.e. trade *with* the break) showed a structurally negative
 edge across a 90-config sweep (swing window 3-18 bars, ATR-amplitude filter,
 H1 structural-trend confirmation) on this account's M5 history for
-XAUUSD/XAGUSD/BTCUSD (Sep 2025-Jul 2026) — profit factor never exceeded
+XAUUSD/XAGUSD (Sep 2025-Jul 2026) — profit factor never exceeded
 ~0.75 in any configuration. The same sweep run in reverse — sell a fresh
 confirmed swing high, buy a fresh confirmed swing low, i.e. fade the break
 instead of following it — was consistently profitable (profit factor
@@ -92,7 +92,7 @@ class MeanReversionV1:
         self.spec = StrategySpec(
             name="mean_reversion_v1",
             version=1,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=(),
             params={"pivot_wing": PIVOT_WING, "tp_rr": TP_RR},

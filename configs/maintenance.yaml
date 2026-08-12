@@ -13,3 +13,22 @@ activity_log:
 wal_checkpoint:
   enabled: true
   interval_minutes: 15
+
+# Bi-weekly retraining of the deep-learning models, run in-process through
+# the same service the "Train" button uses (see
+# strategies/application/training_scheduler.py). Lives here rather than in
+# its own file because it is the same kind of thing as the jobs above: a
+# recurring background task with a lifecycle owned by the backend process.
+#
+# `scripts/cron_train_models.sh` remains a valid alternative for machines
+# that would rather drive this from crontab — set `enabled: false` here if
+# you use it, so the two do not both fire.
+model_training:
+  enabled: true
+  interval_days: 14
+  # Train immediately on backend startup as well. Off by default: a restart
+  # should not kick off a multi-minute CPU job while the trade engine is
+  # still coming up.
+  train_on_startup: false
+  # Symbols to retrain, in order. Empty means "every symbol in app.yaml".
+  symbols: [XAUUSD]

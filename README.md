@@ -57,6 +57,18 @@ make check             # lint (ruff + oxlint) + backend tests + frontend build
 
 Individual gates: `make lint`, `make test`, `make build-frontend` — see `make help`.
 
+## Artificial Intelligence & Deep Learning (SMC)
+
+The project includes an advanced multi-layer neural network that autonomously learns Smart Money Concepts (Order Blocks, FVGs). Complete architectural documentation is available in [`docs/SMC_DEEP_LEARNING.md`](docs/SMC_DEEP_LEARNING.md).
+
+**To trigger the model's training:**
+```bash
+make train-dl          # Extracts data from MT5, trains the neural net, and runs a validation backtest
+```
+
+**To visualize the model's decisions:**
+Open the *Model Dashboard* in the Web App (`make dev`, then use the sidebar menu) for an interactive visualization of the neural activations for every trade!
+
 ## Safety model (do not weaken)
 
 - Everything starts in **paper mode** (`configs/app.yaml: mode: paper`) —

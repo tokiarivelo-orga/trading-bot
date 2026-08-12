@@ -26,6 +26,8 @@ from src.market_data.adapters.replay import SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
 from src.market_data.domain.models import Candle, Timeframe
 from src.shared.db.base import Base
+from src.strategies.registry import StrategyRegistry
+from src.strategies.generated.xauusd_snd_qm_structure_m5_v1 import XauusdSndQmStructureM5
 
 M5_STEP = timedelta(minutes=5)
 START = datetime(2025, 1, 1, tzinfo=UTC)
@@ -238,8 +240,11 @@ async def test_backtest_rejects_unknown_strategy(database_url):
 
 
 async def test_backtest_rejects_symbol_the_strategy_does_not_trade(database_url):
+    registry = StrategyRegistry()
+    strategy = XauusdSndQmStructureM5()
+    registry.register(strategy.spec.name, strategy)
     with pytest.raises(ValueError, match="does not trade"):
-        await run_backtest("breakout_v1", "EURUSD", "2025-01:2025-01", database_url=database_url)
+        await run_backtest(strategy.spec.name, "EURUSD", "2025-01:2025-01", database_url=database_url, strategy_source=registry)
 
 
 def _minimal_configs_dir(tmp_path: Path, *, xauusd_yaml: bool) -> Path:

@@ -1,0 +1,57 @@
+# APEX TURBO H1 — swing rung of the turbo ladder.
+#
+# `xauusd_snd_apex_trendguard_h1`: triggers on H1 closes, zones on H4,
+# higher-timeframe zones on D1. Overrides are byte-identical to
+# `xauusd_apex_turbo_m1`'s (see that file for what each one does).
+#
+# Two things change in the strategy itself at this rung, both forced by
+# running out of ladder rather than chosen:
+#
+#   * the trend ladder starts at the *entry* timeframe (H1/H4/D1) instead
+#     of at the zone timeframe. Above H4/D1 the only rungs left are W1 and
+#     MN, and a backtest pre-loads ~8 W1 bars, so a W1 vote would be pinned
+#     at 0 through most of any replay while voting normally live. A vote
+#     that means different things in backtest and live is worse than no
+#     vote.
+#   * the trend EMA pair is 13/34 rather than 21/55, so the D1 rung is warm
+#     inside that same 60-day pre-roll.
+#
+# ── Measured: XAUUSD 2026-03..2026-08, real engine, broker realism on,
+#    $10,000 start, backtest risk (risk_multiplier below is NOT applied by
+#    a backtest) ──
+#
+#            trades    PF   max DD   end balance   long/short
+#   turbo       104  3.39    1.64%       $10,784         8/96
+#   base         26  5.97    0.40%       $10,200         0/26
+#
+# ~1 position a trading day, and 92% of them short — gold fell 5,387 ->
+# 4,051 over this window, so at this rung the trend gate simply refused to
+# buy. That is the gate working, but it also means this configuration has
+# essentially no measured long-side behaviour: 8 long trades, -$118.71
+# between them. Treat the long side as untested.
+#
+# Outcome mix: 84 of 104 closes are ~+0.20R secure-base trailing scratches,
+# 6 are real take-profits, 14 are losses. The 86.5% win rate is that
+# trailing, not edge — read PF, avg R (0.137) and drawdown.
+#
+# 104 trades over 5 months is a thin sample and it is not out-of-sample
+# (the family was tuned on 2026-08-05, inside this window). Run it
+# alongside the finer rungs rather than in place of them.
+name: normal/xauusd/xauusd_apex_turbo_h1
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_h1
+risk_multiplier: 1.0
+sessions: []
+param_overrides:
+  confirm_mode: "off"
+  max_signals_per_bar: 2
+  max_touch_episode: 20
+  max_entry_depth: 1.00
+  zone_height_atr_min: 0.20
+  zone_height_atr_max: 2.40
+  min_impulse_atr: 0.55
+  allow_counter_trend: true
+  zri_min: 0.35
+  neutral_min_score: 0.0
+  tp2_min_rr: 1.8
+htf_veto_override: null

@@ -1,0 +1,35 @@
+# APEX PRECISION — fewest trades, highest bar for each one.
+#
+# Same strategy family as `xauusd_apex_trendguard_m1`, differing only where
+# there is a reason to differ:
+#
+#   confirm_mode=strict   the M1 candle must be a real confirmation — an
+#                         engulfing-style body OR a rejection wick back into
+#                         the zone, not merely a close in the right
+#                         direction.
+#   zri_min 0.40 -> 0.50  a zone kind must be clearly respected, not merely
+#                         break-even, before it may be traded.
+#   tp2_min_rr 2.2 -> 2.5 no runner unless the structure really pays.
+#
+# HONEST STATUS — read before trusting this one.
+# Unlike the flagship, these three deltas are NOT independently validated.
+# The flagship's numbers come from a 2,118-trade / 3-month replay through
+# the real engine; this variant has only been checked on single sessions,
+# where it takes ~0-4 trades a day, which is too small a sample to tell
+# skill from luck. An earlier, more aggressive version of this file
+# (trend_min_score 3.0, max_entry_depth 0.40, zone_height_atr_max 1.60)
+# took *zero* trades across an entire session and was cut for that reason.
+#
+# Treat this as an experiment to A/B against the flagship over a few weeks,
+# not as the safe default. If you want the validated bot, run
+# `xauusd_apex_trendguard_m1`.
+name: normal/xauusd/xauusd_apex_precision_m1
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_m1
+risk_multiplier: 1.0
+sessions: []
+param_overrides:
+  confirm_mode: strict
+  zri_min: 0.50
+  tp2_min_rr: 2.5
+htf_veto_override: true

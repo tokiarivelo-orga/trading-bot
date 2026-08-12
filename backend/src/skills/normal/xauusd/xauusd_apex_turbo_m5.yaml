@@ -1,0 +1,65 @@
+# APEX TURBO M5 — the turbo configuration one rung up the ladder.
+#
+# Same strategy family as `xauusd_apex_turbo_m1`, same eleven overrides,
+# different entry timeframe: `xauusd_snd_apex_trendguard_m5` triggers on M5
+# closes, draws its zones on M15, reads higher-timeframe zones on H1 and
+# votes trend on M15/H1/H4. `StrategySpec.entry_timeframe` is not something
+# `param_overrides` can reach, which is why this is a separate strategy file
+# rather than another override block — see the strategy docstring.
+#
+# The overrides are exactly the M1 turbo's, unchanged, so the two are a
+# clean timeframe A/B rather than two different tunings:
+#
+#   confirm_mode=off        bare-touch entries, so a signal fires the moment
+#                           price reaches a valid zone
+#   max_signals_per_bar 1->2, max_touch_episode 8->20,
+#   max_entry_depth 0.75->1.00, zone_height band widened,
+#   min_impulse_atr 0.7->0.55, zri_min 0.40->0.35, neutral_min_score->0.0
+#   allow_counter_trend=true, tp2_min_rr 2.2->1.8
+#
+# What is NOT loosened: the Zone Respect Index, the exhaustion guard, the
+# ATR stop cap, the broker R:R floor and the TP front-run. Those are what
+# separate this family from the bots it replaces.
+#
+# ── Measured: XAUUSD 2026-03..2026-08, real engine, broker realism on,
+#    $10,000 start, backtest risk (this file's risk_multiplier is NOT
+#    applied by a backtest — scale the drawdown by it yourself) ──
+#
+#            trades    PF   max DD   end balance   long/short
+#   turbo     2,230  2.70    2.90%       $21,226    706/1,524
+#   base        516  4.31    1.01%       $12,203      168/348
+#
+# ~20 positions a trading day against the flagship configuration's ~5, for
+# roughly 4x the return at half the profit factor and 3x the drawdown —
+# which is the trade this variant exists to make.
+#
+# Gold fell 5,387 -> 4,051 across that window and the book is 68% short,
+# so this is not a long-biased strategy that happened to meet a rally: the
+# trend gate and the Zone Respect Index picked the side from the tape. It
+# is also NOT an out-of-sample result — the family's thresholds were tuned
+# on 2026-08-05, which sits inside this window.
+#
+# The 90.7% win rate is not edge. Outcome mix: 1,927 of the 2,230 closes
+# are ~+0.20R secure-base trailing scratches, 95 are real take-profits, 208
+# are losses — so the win rate is the engine PositionManager's trailing,
+# not the strategy's targets. Read PF, avg R (0.161) and drawdown instead.
+# Those scratch exits are stop fills, which fill exactly in a replay and
+# slip live — expect live below backtest.
+name: normal/xauusd/xauusd_apex_turbo_m5
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_m5
+risk_multiplier: 0.6
+sessions: []
+param_overrides:
+  confirm_mode: "off"
+  max_signals_per_bar: 2
+  max_touch_episode: 20
+  max_entry_depth: 1.00
+  zone_height_atr_min: 0.20
+  zone_height_atr_max: 2.40
+  min_impulse_atr: 0.55
+  allow_counter_trend: true
+  zri_min: 0.35
+  neutral_min_score: 0.0
+  tp2_min_rr: 1.8
+htf_veto_override: null

@@ -1,0 +1,74 @@
+# APEX TURBO — maximum M1 trade count, same safety spine.
+#
+# For the "as many positions per day as possible" mandate. Every gate that
+# only trades frequency for win rate is loosened; the gates that stopped
+# the 2026-08-05 bleed are NOT — the Zone Respect Index, the exhaustion
+# guard, the ATR stop cap, the R:R floor and the TP front-run all stay on,
+# because those are what separate this family from the bots it replaces.
+#
+#   confirm_mode=off        back to bare-touch entries, so a signal fires
+#                           the moment price reaches a valid zone
+#   max_signals_per_bar 1 -> 2
+#                           two different zones may fire on the same bar
+#   max_touch_episode 8 -> 20
+#                           a zone keeps working until it is broken or eaten
+#   max_entry_depth 0.75 -> 1.00
+#                           anywhere inside the rectangle qualifies
+#   zone_height band widened, min_impulse_atr lowered — more zones qualify
+#   allow_counter_trend=true
+#                           fresh opposing zones may be faded, but only
+#                           under the stricter counter-trend R:R (2.5) and
+#                           ZRI (0.55) the strategy already enforces
+#   zri_min 0.40 -> 0.35    slightly more permissive, still a real gate
+#
+# Pure SL/TP replay (no engine trailing) of 2026-08-05: 62 positions at
+# 54.8% WR / PF 4.05 for +$1,856.93, against the flagship's 16 positions /
+# PF 7.05 / +$772.24 on the same session. Roughly 4x the trade count and
+# the larger absolute return, at a visibly lower win rate — which is the
+# trade this variant exists to make.
+#
+# Caveat: that is a single session. Only the flagship has a 3-month,
+# 2,118-trade validation behind it. Run turbo on the reduced risk
+# multiplier below so the extra trade count does not become extra risk per
+# day, and give it a few weeks against the flagship before trusting it.
+name: normal/xauusd/xauusd_apex_turbo_m1
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_m1
+risk_multiplier: 0.6
+sessions: []
+param_overrides:
+  confirm_mode: "off"
+  max_signals_per_bar: 2
+  max_touch_episode: 20
+  max_entry_depth: 1.00
+  zone_height_atr_min: 0.20
+  zone_height_atr_max: 2.40
+  min_impulse_atr: 0.55
+  # Was `true`. Turned off 2026-08-06 after the first real 2-month backtest
+  # of this variant — the flagship's `false` is now measured, not assumed.
+  #
+  #   XAUUSD 2026-06:2026-08 (tuning)     counter=on -> counter=off
+  #     sumR      324.0 -> 351.1   (+27.1R)
+  #     PF        1.393 -> 1.513
+  #     max DD   10.62% ->  9.18%
+  #     equity   17,745 -> 19,044   (+$1,299)
+  #   XAUUSD 2026-05 (out of sample)
+  #     sumR      227.4 -> 232.2   (+4.8R)
+  #     PF        1.670 -> 1.741
+  #     max DD    6.83% ->  6.28%
+  #     equity   15,894 -> 16,036   (+$142)
+  #
+  # Every metric moves the same way in both windows — more R, higher PF,
+  # *lower* drawdown — so this is a filter, not a leverage change. The
+  # out-of-sample effect is ~4x smaller than the tuning window suggested,
+  # which is the usual shrinkage; treat +2% sumR as the honest estimate,
+  # not +8%.
+  #
+  # NOTE: measured on M1 only. The m5/m15/h1/d1 turbo skills still ship
+  # `allow_counter_trend: true` and have NOT been backtested — do not
+  # assume this result transfers to them without their own runs.
+  allow_counter_trend: false
+  zri_min: 0.35
+  neutral_min_score: 0.0
+  tp2_min_rr: 1.8
+htf_veto_override: null

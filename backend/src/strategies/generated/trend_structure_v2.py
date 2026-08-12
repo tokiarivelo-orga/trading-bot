@@ -1,7 +1,7 @@
 """Trend-structure v2: HH/LL continuation, filtered for quality.
 
 Refines `trend_structure_v1` after a 33-run backtest matrix (Sep 2025-Jul
-2026, XAUUSD/XAGUSD/BTCUSD) showed a 21.6% blended win rate against v1's
+2026, XAUUSD/XAGUSD) showed a 21.6% blended win rate against v1's
 2.2:1 TP:SL — well under the 31.2% breakeven win rate that ratio requires.
 The loss cluster was concentrated in choppy stretches where a fractal beat
 the prior swing by a noise-level amount, or where price poked a fraction
@@ -116,7 +116,7 @@ class TrendStructureV2:
         self.spec = StrategySpec(
             name="trend_structure_v2",
             version=2,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=(),
             params={

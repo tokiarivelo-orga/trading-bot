@@ -49,11 +49,12 @@ export function useTradeHistory(filters: Omit<TradeHistoryFilters, "limit" | "of
 
   const items: TradeHistoryItem[] | null = query.isError ? [] : (query.data?.items ?? null);
   const total = query.data?.total ?? 0;
+  const totalProfit = query.data?.total_profit ?? 0;
   const error = query.isError
     ? query.error instanceof ApiError
       ? query.error.message
       : "failed to load trade history"
     : null;
 
-  return { items, total, error, page, setPage, pageSize: PAGE_SIZE };
+  return { items, total, totalProfit, error, page, setPage, pageSize: PAGE_SIZE };
 }

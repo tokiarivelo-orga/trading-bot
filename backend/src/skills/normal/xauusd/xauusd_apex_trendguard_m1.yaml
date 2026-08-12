@@ -1,0 +1,30 @@
+# APEX TRENDGUARD — the flagship M1 bot.
+#
+# Runs `xauusd_snd_apex_trendguard_m1` on its own defaults: every gate
+# calibrated against the 2026-08-05 post-mortem (see the strategy file's
+# docstring for the number behind each one).
+#
+# Validated two ways:
+#
+#   * Real engine, XAUUSD M1, 2026-05..2026-08 (`make backtest`):
+#     2,118 trades, PF 6.53, max drawdown 1.03%, worst losing streak 4,
+#     every month positive. NOTE the 96.5% win rate is not strategy edge —
+#     it is the engine PositionManager's secure-base trailing closing ~94%
+#     of positions at exactly +0.20R. Read avg R (0.20), PF and drawdown,
+#     not the win rate.
+#   * Pure SL/TP replay (no trailing) of 2026-08-05, the session the old
+#     bots lost -$889.58 on across 608 positions at 41.2% WR / PF 0.73:
+#     this configuration takes 16 positions at 62.5% WR / PF 7.05 for
+#     +$772.24, and takes zero shorts, because the Zone Respect Index
+#     switches the supply book off once gold starts closing through
+#     supply zones.
+#
+# This is the balanced variant: keep it as the reference bot and A/B the
+# other two against it.
+name: normal/xauusd/xauusd_apex_trendguard_m1
+symbol: XAUUSD
+strategy: xauusd_snd_apex_trendguard_m1
+risk_multiplier: 1.0
+sessions: []
+param_overrides: {}
+htf_veto_override: null

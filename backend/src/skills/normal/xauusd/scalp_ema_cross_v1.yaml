@@ -1,5 +1,0 @@
-name: normal/xauusd/scalp_ema_cross_v1
-symbol: XAUUSD
-strategy: scalp_ema_cross_v1
-risk_multiplier: 1.0
-sessions: []

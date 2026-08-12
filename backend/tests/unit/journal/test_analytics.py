@@ -214,7 +214,9 @@ def test_trade_analytics_record_has_no_json_snapshot_or_structure_fields():
         "execution_latency_ms",
         "broker_retcode",
         "mfe",
+        "mfe_time",
         "mae",
+        "mae_time",
         # Regime tagging + transaction cost (OBSERVABILITY_PLAN.md Phase 6) —
         # bucket strings + cost only, still no JSON.
         "regime_volatility",

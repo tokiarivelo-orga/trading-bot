@@ -100,6 +100,8 @@ class TradeJournalService:
             # distinguishes it from a pre-Phase-3 row that never was.
             mfe=0.0,
             mae=0.0,
+            mfe_time=event.occurred_at,
+            mae_time=event.occurred_at,
         )
         await asyncio.to_thread(self._repository.save, record, self._account_id)
         logger.info(
@@ -137,17 +139,20 @@ class TradeJournalService:
             return
         for trade in open_trades:
             updated = extend_excursion(
-                Excursion(mfe=trade.mfe or 0.0, mae=trade.mae or 0.0),
+                Excursion(mfe=trade.mfe or 0.0, mae=trade.mae or 0.0, mfe_time=trade.mfe_time, mae_time=trade.mae_time),
                 side=trade.side,
                 open_price=trade.open_price,
                 high=candle.high,
                 low=candle.low,
+                time=candle.time,
             )
             await asyncio.to_thread(
                 self._repository.update_excursion,
                 trade.id,
                 updated.mfe,
                 updated.mae,
+                updated.mfe_time,
+                updated.mae_time,
                 self._account_id,
             )
 
@@ -166,10 +171,11 @@ class TradeJournalService:
         # inside a single candle real MFE/MAE numbers — no candle ever closed
         # during its life, so this is its only measurement.
         excursion = finalize_excursion(
-            Excursion(mfe=existing.mfe or 0.0, mae=existing.mae or 0.0),
+            Excursion(mfe=existing.mfe or 0.0, mae=existing.mae or 0.0, mfe_time=existing.mfe_time, mae_time=existing.mae_time),
             side=existing.side,
             open_price=existing.open_price,
             close_price=event.close_price,
+            time=event.occurred_at,
         )
         closed = replace(
             existing,
@@ -181,6 +187,8 @@ class TradeJournalService:
             h1_exit_snapshot=snapshot.h1,
             mfe=excursion.mfe,
             mae=excursion.mae,
+            mfe_time=excursion.mfe_time,
+            mae_time=excursion.mae_time,
         )
         await asyncio.to_thread(self._repository.save, closed, self._account_id)
         logger.info(
@@ -299,7 +307,7 @@ class TradeJournalService:
         order_dir: Literal["asc", "desc"] = "desc",
         limit: int = 50,
         offset: int = 0,
-    ) -> tuple[list[TradeRecord], int]:
+    ) -> tuple[list[TradeRecord], int, float]:
         return await asyncio.to_thread(
             self._repository.search,
             symbol=symbol,

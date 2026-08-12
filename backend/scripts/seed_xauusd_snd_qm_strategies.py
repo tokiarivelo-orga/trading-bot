@@ -31,6 +31,10 @@ _STRATEGIES: tuple[tuple[str, str], ...] = (
     ("xauusd_snd_qm_structure_m5", "xauusd_snd_qm_structure_m5_v1"),
     ("xauusd_snd_qm_structure_m15", "xauusd_snd_qm_structure_m15_v1"),
     ("xauusd_snd_qm_structure_h1", "xauusd_snd_qm_structure_h1_v1"),
+    ("xauusd_snd_qm_structure_adaptive_m1", "xauusd_snd_qm_structure_adaptive_m1_v1"),
+    ("xauusd_snd_qm_structure_adaptive_m5", "xauusd_snd_qm_structure_adaptive_m5_v1"),
+    ("xauusd_snd_qm_structure_adaptive_m15", "xauusd_snd_qm_structure_adaptive_m15_v1"),
+    ("xauusd_snd_qm_structure_adaptive_h1", "xauusd_snd_qm_structure_adaptive_h1_v1"),
 )
 
 

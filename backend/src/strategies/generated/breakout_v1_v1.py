@@ -17,7 +17,7 @@ LOOKBACK = 20
 TP_RR = 2.2
 # Point size per traded symbol (configs/symbols/*.yaml) — converts
 # ctx.spread_points (raw broker points) into a price distance.
-POINT_VALUES = {"XAUUSD": 0.01, "XAGUSD": 0.001, "BTCUSD": 0.01}
+POINT_VALUES = {"XAUUSD": 0.01, "XAGUSD": 0.001}
 
 
 class BreakoutV1:
@@ -25,7 +25,7 @@ class BreakoutV1:
         self.spec = StrategySpec(
             name="breakout_v1",
             version=1,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=("H1", "H4"),
             params={"lookback": LOOKBACK, "tp_rr": TP_RR},

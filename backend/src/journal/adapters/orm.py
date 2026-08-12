@@ -60,7 +60,9 @@ class TradeRow(Base):
     execution_latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     broker_retcode: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mfe: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mae: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Regime tagging + transaction cost (OBSERVABILITY_PLAN.md Phase 6).
     # Nullable throughout: every trade journaled before Phase 6 has no such
     # measurement.

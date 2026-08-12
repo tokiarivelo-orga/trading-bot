@@ -14,6 +14,7 @@ from src.engine.domain.volatility import (
 )
 from src.engine.domain.zone_detection import Base, BaseKind
 from src.market_data.domain.models import Candle, SymbolInfo, Timeframe
+from src.strategies.domain.models import ExitActionKind, ExitDecision
 
 CAPS = RiskCaps(
     risk_per_trade_pct=0.5,
@@ -259,6 +260,70 @@ def _regime_and_atr(candles: list[Candle], cfg: VolatilityConfig = VOLATILITY_CF
         high_percentile=cfg.high_percentile,
         extreme_percentile=cfg.extreme_percentile,
     )
+
+
+async def test_apply_strategy_action_close_closes_position():
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(
+        position, ExitDecision(action=ExitActionKind.CLOSE, reason="fvg violated")
+    )
+
+    assert order_service.closed == [1]
+    assert order_service.close_reasons == ["fvg violated"]
+    assert order_service.modified == []
+
+
+async def test_apply_strategy_action_breakeven_moves_sl_to_entry():
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(
+        position, ExitDecision(action=ExitActionKind.BREAKEVEN, reason="continuation confirmed")
+    )
+
+    assert order_service.modified == [(1, 2400.0, 2420.0)]
+    assert order_service.modify_reasons == ["continuation confirmed"]
+    assert order_service.closed == []
+
+
+async def test_apply_strategy_action_breakeven_never_loosens_an_already_tighter_sl():
+    # SL already tighter than entry (e.g. `_manage`'s give-back rule already
+    # ratcheted it past breakeven) — a strategy-requested breakeven must
+    # never loosen it back to entry, same invariant every other SL rule
+    # obeys via `_improves`.
+    position = _position(open_price=2400.0, sl=2405.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(position, ExitDecision(action=ExitActionKind.BREAKEVEN))
+
+    assert order_service.modified == []
+
+
+async def test_apply_strategy_action_breakeven_sets_sl_when_position_has_none():
+    position = _position(open_price=2400.0, sl=None)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(position, ExitDecision(action=ExitActionKind.BREAKEVEN))
+
+    assert order_service.modified == [(1, 2400.0, 2420.0)]
+
+
+async def test_apply_strategy_action_breakeven_respects_sell_direction():
+    # For a SELL, breakeven only improves when it moves SL *down* toward
+    # entry; an SL already below entry must not be loosened back up to it.
+    position = _position(side=Side.SELL, open_price=2400.0, sl=2395.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(position, ExitDecision(action=ExitActionKind.BREAKEVEN))
+
+    assert order_service.modified == []
 
 
 async def test_moves_sl_to_breakeven_once_risk_is_covered():

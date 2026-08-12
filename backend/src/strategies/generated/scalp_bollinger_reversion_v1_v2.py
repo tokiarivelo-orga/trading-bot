@@ -55,7 +55,7 @@ class ScalpBollingerReversionV2:
         self.spec = StrategySpec(
             name="scalp_bollinger_reversion_v1",
             version=2,
-            symbols=("XAUUSD", "XAGUSD", "BTCUSD", "Boom 1000 Index", "Volatility 75 Index"),
+            symbols=(),  # empty = accepts all dynamically configured symbols
             entry_timeframe="M5",
             confirmation_timeframes=(),
             params={

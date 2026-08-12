@@ -1013,3 +1013,128 @@ export function atr(candles: Candle[], period: number): LinePoint[] {
   }
   return points;
 }
+
+export interface SmcOb {
+  time: UTCTimestamp;
+  formedTime: UTCTimestamp;
+  kind: 'bullish' | 'bearish';
+  high: number;
+  low: number;
+  mitigatedTime?: UTCTimestamp;
+}
+
+export interface SmcFvg {
+  time: UTCTimestamp;
+  formedTime: UTCTimestamp;
+  kind: 'bullish' | 'bearish';
+  high: number;
+  low: number;
+  mitigatedTime?: UTCTimestamp;
+}
+
+export interface SmcStructure {
+  time: UTCTimestamp;
+  price: number;
+  kind: 'BOS' | 'CHoCH';
+  direction: 'bullish' | 'bearish';
+}
+
+export interface SmcResult {
+  obs: SmcOb[];
+  fvgs: SmcFvg[];
+  structures: SmcStructure[];
+}
+
+export function smcConcepts(candles: Candle[], lookback: number, atrPeriod: number): SmcResult {
+  const obs: SmcOb[] = [];
+  const fvgs: SmcFvg[] = [];
+  const structures: SmcStructure[] = [];
+  const atrPoints = atr(candles, atrPeriod);
+  if (atrPoints.length === 0) return { obs, fvgs, structures };
+
+  const points = swingStructure(candles, lookback, atrPeriod, 0.1);
+  
+  // Detect BOS and CHoCH from points
+  let trend: 'bullish' | 'bearish' | null = null;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+
+    if (curr.label === 'HH' && (prev.label === 'HL' || prev.label === 'LH')) {
+      const type = trend === 'bullish' ? 'BOS' : 'CHoCH';
+      trend = 'bullish';
+      structures.push({ time: curr.time, price: curr.price, kind: type, direction: 'bullish' });
+    } else if (curr.label === 'LL' && (prev.label === 'LH' || prev.label === 'HL')) {
+      const type = trend === 'bearish' ? 'BOS' : 'CHoCH';
+      trend = 'bearish';
+      structures.push({ time: curr.time, price: curr.price, kind: type, direction: 'bearish' });
+    }
+  }
+
+  // Detect FVGs (Inefficiencies)
+  // To avoid noise, only take FVGs that are visually significant (gap > 0.5 * atr)
+  const atrByTime = new Map(atrPoints.map(p => [p.time as number, p.value]));
+  for (let i = 2; i < candles.length; i++) {
+    const c1 = candles[i - 2];
+    const c3 = candles[i];
+    const atrVal = atrByTime.get(candles[i].time as number) || 0;
+    
+    // Bullish FVG
+    if (c1.high < c3.low && (c3.low - c1.high) > atrVal * 0.2) {
+      fvgs.push({ time: candles[i - 1].time as UTCTimestamp, formedTime: c3.time as UTCTimestamp, kind: 'bullish', high: c3.low, low: c1.high });
+      
+      // Trace the Base (OB) just below the bullish FVG
+      let obIdx = i - 2;
+      // Find the last bearish (or doji) candle that forms the base before the impulse
+      while (obIdx > 0 && candles[obIdx].close > candles[obIdx].open) {
+        obIdx--;
+      }
+      if (obIdx >= 0) {
+        obs.push({ time: candles[obIdx].time as UTCTimestamp, formedTime: c3.time as UTCTimestamp, kind: 'bullish', high: candles[obIdx].high, low: candles[obIdx].low });
+      }
+    }
+    // Bearish FVG
+    else if (c1.low > c3.high && (c1.low - c3.high) > atrVal * 0.2) {
+      fvgs.push({ time: candles[i - 1].time as UTCTimestamp, formedTime: c3.time as UTCTimestamp, kind: 'bearish', high: c1.low, low: c3.high });
+      
+      // Trace the Base (OB) just above the bearish FVG
+      let obIdx = i - 2;
+      // Find the last bullish (or doji) candle that forms the base before the impulse
+      while (obIdx > 0 && candles[obIdx].close < candles[obIdx].open) {
+        obIdx--;
+      }
+      if (obIdx >= 0) {
+        obs.push({ time: candles[obIdx].time as UTCTimestamp, formedTime: c3.time as UTCTimestamp, kind: 'bearish', high: candles[obIdx].high, low: candles[obIdx].low });
+      }
+    }
+  }
+
+  // Mitigations
+  const mitigate = (list: any[], isFvg: boolean = false) => {
+    for (let i = 0; i < list.length; i++) {
+      const item = list[i];
+      const startIdx = candles.findIndex(c => c.time === item.formedTime);
+      if (startIdx === -1) continue;
+      // FVGs mitigate when fully filled. OBs mitigate when touched.
+      // We start checking strictly AFTER the candle that formed the FVG/OB.
+      for (let j = startIdx + 1; j < candles.length; j++) {
+        if (item.kind === 'bullish') {
+          if (isFvg ? candles[j].low <= item.low : candles[j].low <= item.high) {
+            item.mitigatedTime = candles[j].time as UTCTimestamp;
+            break;
+          }
+        } else {
+          if (isFvg ? candles[j].high >= item.high : candles[j].high >= item.low) {
+            item.mitigatedTime = candles[j].time as UTCTimestamp;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  mitigate(obs, false);
+  mitigate(fvgs, true);
+
+  return { obs, fvgs, structures };
+}

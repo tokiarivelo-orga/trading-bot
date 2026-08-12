@@ -71,6 +71,7 @@ import {
   sndZonesV2,
   swingStructure,
   vwap,
+  smcConcepts,
 } from './indicators';
 import { VolumeProfilePrimitive } from './volumeProfilePrimitive';
 import { cssVar, derivePeriodParam, hexToRgba, pickZoneColor, usesSndZones } from './chartFormat';
@@ -474,6 +475,7 @@ export function useIndicators(params: UseIndicatorsParams) {
         return points;
       };
       for (const manualIndicator of manualIndicatorsRef.current) {
+        if (manualIndicator.hidden) continue;
         const lineStyleVal =
           manualIndicator.lineStyle === 'dashed'
             ? LineStyle.Dashed
@@ -1022,6 +1024,76 @@ export function useIndicators(params: UseIndicatorsParams) {
             }
             break;
           }
+          case 'smc': {
+            const { obs, fvgs, structures } = smcConcepts(candles, manualIndicator.period, STRUCTURE_ATR_PERIOD);
+            
+            // Plot structures (BOS / CHoCH)
+            for (const st of structures) {
+              structureMarkers.push({
+                time: st.time,
+                position: st.direction === 'bullish' ? 'belowBar' : 'aboveBar',
+                color: manualIndicator.color,
+                shape: st.direction === 'bullish' ? 'arrowUp' : 'arrowDown',
+                size: 0,
+                text: `${st.kind} (${st.direction === 'bullish' ? '+' : '-'})`,
+              });
+            }
+
+            const lastTime = candles[candles.length - 1].time as UTCTimestamp;
+            let zoneIdx = 0;
+
+            const drawZone = (z: any, type: string) => {
+              const demand = z.kind === 'bullish';
+              const touched = !!z.mitigatedTime;
+              const isFvg = type === 'FVG';
+              
+              const smcColors = isFvg 
+                ? (zoneColorStyle.fvg || { demandColor: '#8a2be2', supplyColor: '#8a2be2', touchedColor: '#787b86' })
+                : (zoneColorStyle.smc || { demandColor: '#42a5f5', supplyColor: '#ff9800', touchedColor: '#787b86' });
+                
+              const freshColor = pickZoneColor(smcColors, demand, false, zoneColorStyle.customColors);
+              const lineColor = touched ? pickZoneColor(smcColors, demand, true, zoneColorStyle.customColors) : freshColor;
+              const fillColor = touched ? hexToRgba(lineColor, 0.06) : hexToRgba(lineColor, isFvg ? 0.1 : 0.2);
+              const smcZoneId = `${STRATEGY_DRAWING_PREFIX}smc-zone:${manualIndicator.id}:${zoneIdx++}`;
+              manager.addDrawing(
+                new Rectangle(
+                  smcZoneId,
+                  [
+                    { time: z.time, price: z.high },
+                    { time: z.mitigatedTime ?? lastTime, price: z.low },
+                  ],
+                  { lineColor, lineWidth: lineWidthVal, lineDash: lineDashVal, fillColor },
+                  { filled: true, locked: true },
+                ),
+              );
+              zoneMeta.set(smcZoneId, {
+                indicator: 'smc',
+                indicatorLabel: `SMC ${type}`,
+                pattern: type,
+                kind: demand ? 'demand' : 'supply',
+                priceLow: z.low,
+                priceHigh: z.high,
+                timeStart: z.time as number,
+                timeEnd: z.mitigatedTime ? (z.mitigatedTime as number) : null,
+                state: touched ? 'touched' : 'fresh',
+              });
+              
+              if (!isFvg) {
+                structureMarkers.push({
+                  time: z.time,
+                  position: 'atPriceMiddle',
+                  price: z.high,
+                  color: lineColor,
+                  shape: demand ? 'arrowUp' : 'arrowDown',
+                  text: `${type} ${demand ? 'Buy' : 'Sell'}`,
+                });
+              }
+            };
+
+            for (const ob of obs) drawZone(ob, 'OB');
+            for (const fvg of fvgs) drawZone(fvg, 'FVG');
+            break;
+          }
         }
       }
       // If we have custom code results, plot their custom indicators
@@ -1079,6 +1151,7 @@ export function useIndicators(params: UseIndicatorsParams) {
       // the same `structureMarkers`/structure-markers plugin the built-in
       // structure/QML/pattern indicators already use instead.
       for (const manualIndicator of manualIndicatorsRef.current) {
+        if (manualIndicator.hidden) continue;
         if (
           manualIndicator.type !== 'custom' ||
           !(manualIndicator.indicatorId || manualIndicator.previewCode)

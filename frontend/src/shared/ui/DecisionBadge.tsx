@@ -1,7 +1,7 @@
 import type { TradeHistoryItem } from "@/shared/api/client";
 
 export interface DecisionBadgeTrade
-  extends Pick<TradeHistoryItem, "indicators" | "zone" | "pattern" | "structure"> {}
+  extends Pick<TradeHistoryItem, "indicators" | "zone" | "pattern" | "structure" | "reason" | "confidence"> {}
 
 interface DecisionBadgeProps {
   trade: DecisionBadgeTrade;
@@ -14,7 +14,7 @@ interface DecisionBadgeProps {
  * `TradeDecisionModal` for the full breakdown. Falls back to a plain "—"
  * when the trade has no decision context (manual/API trades). */
 export function DecisionBadge({ trade, onClick }: DecisionBadgeProps) {
-  const { indicators, zone, pattern, structure } = trade;
+  const { indicators, zone, pattern, structure, reason, confidence } = trade;
 
   let label: string;
   let tone: string;
@@ -36,6 +36,12 @@ export function DecisionBadge({ trade, onClick }: DecisionBadgeProps) {
     tone = "border-ink-muted text-ink-muted";
   } else if (structure.length > 0) {
     label = `${structure[structure.length - 1].label} breakout`;
+    tone = "border-ink-muted text-ink-muted";
+  } else if (reason && reason.startsWith("DL ")) {
+    label = `AI Conf: ${confidence ? Math.round(confidence * 100) : '?'}%`;
+    tone = "border-accent text-accent shadow-[0_0_8px_rgba(var(--accent-rgb),0.3)]";
+  } else if (reason) {
+    label = "View reason";
     tone = "border-ink-muted text-ink-muted";
   } else {
     return <span className="cursor-default text-ink-muted">—</span>;

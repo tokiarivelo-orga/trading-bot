@@ -15,7 +15,7 @@ APP_YAML = (
     "# Global app configuration. Hot-reloadable.\n"
     "mode: live              # paper | live  — NEVER switch to live before Phase 9 criteria\n"
     'timezone: "Indian/Antananarivo"\n'
-    'symbols: [XAUUSD, XAGUSD, BTCUSD, "Boom 1000 Index"]\n'
+    'symbols: [XAUUSD, XAGUSD]\n'
     "engine:\n"
     "  enabled: true\n"
     "  entry_timeframe: M5\n"
@@ -39,8 +39,6 @@ def test_appends_new_symbol(configs_dir):
     assert data["symbols"] == [
         "XAUUSD",
         "XAGUSD",
-        "BTCUSD",
-        "Boom 1000 Index",
         "Volatility 75 Index",
     ]
 
@@ -60,7 +58,7 @@ def test_preserves_every_other_line_byte_for_byte(configs_dir):
 
 
 def test_idempotent_on_already_present_symbol(configs_dir):
-    first = add_symbol_to_app_config("Boom 1000 Index", configs_dir)
+    first = add_symbol_to_app_config("XAUUSD", configs_dir)
 
     assert first is False
     assert (configs_dir / "app.yaml").read_text() == APP_YAML

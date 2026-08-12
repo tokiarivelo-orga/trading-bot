@@ -240,30 +240,53 @@ def _seed_history(repository) -> None:
 
 def test_search_with_no_filters_returns_everything_and_total(repository):
     _seed_history(repository)
-    items, total = repository.search()
+    items, total, total_profit = repository.search()
     assert total == 4
+    assert total_profit == pytest.approx(5.45)
     assert [r.id for r in items] == ["4", "3", "2", "1"]  # open_time desc
 
 
 def test_search_filters_by_symbol(repository):
     _seed_history(repository)
-    items, total = repository.search(symbol="EURUSD")
+    items, total, _ = repository.search(symbol="EURUSD")
     assert total == 2
     assert {r.id for r in items} == {"3", "4"}
 
 
 def test_search_filters_by_side_and_strategy_version(repository):
     _seed_history(repository)
-    items, total = repository.search(side="sell", strategy_version="breakout_v1:v1")
+    items, total, _ = repository.search(side="sell", strategy_version="breakout_v1:v1")
     assert total == 1
     assert items[0].id == "2"
 
 
 def test_search_filters_by_skill(repository):
     _seed_history(repository)
-    items, total = repository.search(skill="news/xauusd")
+    items, total, _ = repository.search(skill="news/xauusd")
     assert total == 1
     assert items[0].id == "2"
+
+
+def test_search_filters_by_strategy_version_substring(repository):
+    _seed_history(repository)
+    items, total, _ = repository.search(strategy_version="breakout")
+    assert total == 2
+    assert {r.id for r in items} == {"1", "2"}
+
+    items_rev, total_rev, _ = repository.search(strategy_version="meanrev")
+    assert total_rev == 1
+    assert items_rev[0].id == "3"
+
+
+def test_search_filters_by_skill_substring(repository):
+    _seed_history(repository)
+    items, total, _ = repository.search(skill="xauusd")
+    assert total == 2
+    assert {r.id for r in items} == {"1", "2"}
+
+    items_norm, total_norm, _ = repository.search(skill="normal")
+    assert total_norm == 1
+    assert items_norm[0].id == "1"
 
 
 def test_search_outcome_win_loss_breakeven_open(repository):
@@ -278,7 +301,7 @@ def test_search_filters_by_open_time_range(repository):
     _seed_history(repository)
     frm = int(utc(2026, 7, 10, 16, 0).timestamp())
     to = int(utc(2026, 7, 10, 18, 0).timestamp())
-    items, total = repository.search(open_from=frm, open_to=to)
+    items, total, _ = repository.search(open_from=frm, open_to=to)
     assert total == 2
     assert {r.id for r in items} == {"2", "3"}
 
@@ -287,14 +310,14 @@ def test_search_filters_by_close_time_range(repository):
     _seed_history(repository)
     frm = int(utc(2026, 7, 10, 15, 0).timestamp())
     to = int(utc(2026, 7, 10, 17, 0).timestamp())
-    items, total = repository.search(close_from=frm, close_to=to)
+    items, total, _ = repository.search(close_from=frm, close_to=to)
     assert total == 2
     assert {r.id for r in items} == {"1", "2"}
 
 
 def test_search_orders_by_profit_asc(repository):
     _seed_history(repository)
-    items, total = repository.search(outcome=None, order_by="profit", order_dir="asc")
+    items, total, _ = repository.search(outcome=None, order_by="profit", order_dir="asc")
     # open trade has profit=None, sorts first under ascending NULLS-first (sqlite default)
     assert total == 4
     assert items[-1].id == "1"  # highest profit (9.65) last when ascending
@@ -302,8 +325,8 @@ def test_search_orders_by_profit_asc(repository):
 
 def test_search_paginates_with_limit_and_offset(repository):
     _seed_history(repository)
-    page1, total = repository.search(limit=2, offset=0)
-    page2, _ = repository.search(limit=2, offset=2)
+    page1, total, _ = repository.search(limit=2, offset=0)
+    page2, _, _ = repository.search(limit=2, offset=2)
     assert total == 4
     assert [r.id for r in page1] == ["4", "3"]
     assert [r.id for r in page2] == ["2", "1"]
@@ -327,7 +350,7 @@ def test_search_scopes_to_account_id(repository):
     repository.save(make_record("1"), account_id="ftmo-1")
     repository.save(make_record("2"), account_id="ftmo-2")
 
-    items, total = repository.search(account_id="ftmo-1")
+    items, total, _ = repository.search(account_id="ftmo-1")
     assert total == 1
     assert items[0].id == "1"
 

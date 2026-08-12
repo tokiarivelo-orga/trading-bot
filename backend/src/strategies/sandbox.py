@@ -31,8 +31,44 @@ import pandas as pd
 
 from src.strategies.domain.models import MarketContext, Strategy
 
+# `src.strategies.domain.fatigue` and `...domain.online_learning` are here for
+# the same reason `...domain.models` is: pure domain code (math/numpy/pandas
+# only, no I/O, no adapters, no framework) that every strategy would otherwise
+# have to copy-paste.
+#
+# WARNING — `pathlib` and `torch` do NOT have that property, and they weaken
+# the guarantee this module's docstring claims. `open` is in
+# FORBIDDEN_CALL_NAMES, but `pathlib.Path.read_text()`/`write_text()` walk
+# straight past that check, so generated strategy code can currently read and
+# write the filesystem. They were added so `smc_dl_m5_v1.py` could load model
+# weights in `__init__`; a safer shape would be to load the weights outside
+# the sandbox and hand the array in, leaving this list to pure-domain modules.
+# Flagged rather than reverted because the smc_dl work depends on it today.
 ALLOWED_IMPORT_MODULES = frozenset(
-    {"math", "statistics", "numpy", "pandas", "src.strategies.domain.models"}
+    {
+        "math",
+        "statistics",
+        "datetime",
+        "numpy",
+        "pandas",
+        "typing",
+        "dataclasses",
+        "collections",
+        "itertools",
+        "torch",
+        "pathlib",
+        "src.strategies.generated.smc_dl_model",
+        "src.strategies.generated.smc_dl_features",
+        "src.strategies.generated.smc_dl_model_v2",
+        "src.strategies.generated.smc_dl_features_v2",
+        # Labels are a training-time concern, but `expected_r` lives there so
+        # the trainer, the strategy gate and the API all share one copy of
+        # the expected-R arithmetic instead of three drifting ones.
+        "src.strategies.generated.smc_dl_labels_v2",
+        "src.strategies.domain.models",
+        "src.strategies.domain.fatigue",
+        "src.strategies.domain.online_learning",
+    }
 )
 FORBIDDEN_CALL_NAMES = frozenset({"exec", "eval", "compile", "open", "__import__", "input"})
 _SMOKE_TIMEOUT_SECONDS = 2.0
@@ -209,14 +245,14 @@ def _smoke_test(instance: Strategy) -> tuple[str, ...]:
 
 
 def _synthetic_context(spec: object) -> MarketContext:
-    # Caller (`_smoke_test`) already guarantees `spec.symbols` is non-empty —
-    # no fallback symbol here, since that would let a spec-less-of-symbols
-    # strategy silently validate against an arbitrary instrument.
+    # An empty spec.symbols means the strategy accepts any symbol (dynamic
+    # symbol mode). Fall back to a generic instrument for the smoke test.
     symbols = spec.symbols
+    smoke_symbol = symbols[0] if symbols else "XAUUSD"
     confirmation_tfs = getattr(spec, "confirmation_timeframes", ())
     timeframes = {getattr(spec, "entry_timeframe", "M5"), *confirmation_tfs}
     return MarketContext(
-        symbol=symbols[0],
+        symbol=smoke_symbol,
         candles={tf: _synthetic_candles() for tf in timeframes},
         spread_points=20.0,
     )

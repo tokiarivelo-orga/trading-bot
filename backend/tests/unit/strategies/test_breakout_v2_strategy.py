@@ -100,8 +100,8 @@ def test_no_signal_with_insufficient_m5_history():
     assert BreakoutV2().evaluate(ctx) is None
 
 
-def test_spec_covers_all_three_symbols():
+def test_spec_covers_base_symbols():
     spec = BreakoutV2().spec
-    assert set(spec.symbols) == {"XAUUSD", "XAGUSD", "BTCUSD"}
+    assert spec.symbols == ()  # empty = accepts all dynamically configured symbols
     assert spec.entry_timeframe == "M5"
     assert spec.version == 2

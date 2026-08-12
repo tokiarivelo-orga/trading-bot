@@ -89,9 +89,13 @@ class TradeRecord:
     mfe: float | None = None
     """Maximum favorable excursion in price units — the furthest the market
     ever moved in the trade's favor from entry. Non-negative."""
+    mfe_time: datetime | None = None
+    """Time at which the maximum favorable excursion occurred."""
     mae: float | None = None
     """Maximum adverse excursion in price units — the furthest the market
     ever moved against the trade from entry. Non-negative."""
+    mae_time: datetime | None = None
+    """Time at which the maximum adverse excursion occurred."""
     # ── Regime tagging (OBSERVABILITY_PLAN.md Phase 6) ─────────────────────
     # Snapshotted by `engine/application/trade_loop.py` at the moment the
     # signal fired (`engine.domain.regime.compute_entry_regime`) and carried
@@ -132,7 +136,9 @@ class OpenTradeExcursion:
     side: str  # "buy" | "sell"
     open_price: float
     mfe: float | None
+    mfe_time: datetime | None = None
     mae: float | None
+    mae_time: datetime | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -160,7 +166,9 @@ class TradeAnalyticsRecord:
     execution_latency_ms: float | None = None
     broker_retcode: int | None = None
     mfe: float | None = None
+    mfe_time: datetime | None = None
     mae: float | None = None
+    mae_time: datetime | None = None
     # Regime tagging (OBSERVABILITY_PLAN.md Phase 6) — bucket strings + cost
     # only; the two raw floats (`regime_volatility_percentile`, `regime_adx`)
     # aren't read by any analytics aggregation, so they're left off this slim
