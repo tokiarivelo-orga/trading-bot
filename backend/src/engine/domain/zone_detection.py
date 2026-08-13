@@ -20,6 +20,8 @@ from enum import StrEnum
 import numpy as np
 import pandas as pd
 
+from src.shared.domain.indicators import atr  # noqa: F401 - re-exported for existing callers
+
 DEFAULT_ATR_PERIOD = 14
 DEFAULT_BASE_BODY_ATR_MULT = 0.5
 DEFAULT_LEG_TRAVEL_ATR_MULT = 0.7
@@ -39,20 +41,6 @@ class Base:
     base_start: int
     leg_out_end: int
     broken: bool
-
-
-def _true_range_values(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray) -> np.ndarray:
-    tr = highs - lows
-    if len(tr) > 1:
-        gap_high = np.abs(highs[1:] - closes[:-1])
-        gap_low = np.abs(lows[1:] - closes[:-1])
-        tr[1:] = np.maximum(tr[1:], np.maximum(gap_high, gap_low))
-    return tr
-
-
-def atr(highs: np.ndarray, lows: np.ndarray, closes: np.ndarray, period: int) -> pd.Series:
-    tr = pd.Series(_true_range_values(highs, lows, closes))
-    return tr.rolling(period, min_periods=period).mean()
 
 
 def detect_bases(

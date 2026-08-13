@@ -63,6 +63,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.engine.domain.regime import RegimeConfig
+
 # Longest trailing window used on the entry timeframe. Kept well inside
 # `trade_loop.DEFAULT_CONTEXT_BARS = 200` — see module docstring.
 _MAX_LOOKBACK_M5 = 120
@@ -164,12 +166,24 @@ FEATURE_NAMES: tuple[str, ...] = (
 
 N_FEATURES = len(FEATURE_NAMES)
 
-# Session boundaries in UTC hours. Used to build features only — the model
-# learns whether an hour matters. A hard per-hour *gate* was measured on this
-# data at PF 2.70 in-sample and PF 0.12 out-of-sample, so it must not be one.
-_ASIAN = (0, 8)
-_LONDON = (7, 16)
-_NY = (12, 21)
+# Session boundaries in UTC hours, sourced from the same `RegimeConfig`
+# defaults the engine's regime tagging uses (`engine/domain/regime.py`) so
+# there is one definition of "Asian"/"London"/"New York" instead of two
+# quietly-diverging ones. Used to build features only — the model learns
+# whether an hour matters. A hard per-hour *gate* was measured on this data
+# at PF 2.70 in-sample and PF 0.12 out-of-sample, so it must not be one.
+#
+# NOTE: this previously read `_ASIAN = (0, 8)` and `_NY = (12, 21)` — both
+# differ from `RegimeConfig`'s defaults (`session_asian_*_hour` = 22->7,
+# wrapping past midnight; `session_new_york_*_hour` = 16->21). Switching to
+# the shared config changes the numeric `sess_asian`/`sess_ny`/`sess_overlap`
+# feature values the already-trained `smc_dl_m5_v2` model was fit on — see
+# the reconciliation note in this repo's phase history before retraining or
+# trusting that model's output against the new boundaries unreviewed.
+_regime_defaults = RegimeConfig()
+_ASIAN = (_regime_defaults.session_asian_start_hour, _regime_defaults.session_asian_end_hour)
+_LONDON = (_regime_defaults.session_london_start_hour, _regime_defaults.session_london_end_hour)
+_NY = (_regime_defaults.session_new_york_start_hour, _regime_defaults.session_new_york_end_hour)
 
 
 # ---------------------------------------------------------------------------
@@ -590,24 +604,41 @@ def _time_features(df: pd.DataFrame) -> pd.DataFrame:
     out["sin_dow"] = np.sin(2 * np.pi * dow / 7.0)
     out["cos_dow"] = np.cos(2 * np.pi * dow / 7.0)
 
-    asian = ((hour_frac >= _ASIAN[0]) & (hour_frac < _ASIAN[1])).astype(float)
-    london = ((hour_frac >= _LONDON[0]) & (hour_frac < _LONDON[1])).astype(float)
-    ny = ((hour_frac >= _NY[0]) & (hour_frac < _NY[1])).astype(float)
+    asian = _session_mask(hour_frac, _ASIAN[0], _ASIAN[1]).astype(float)
+    london = _session_mask(hour_frac, _LONDON[0], _LONDON[1]).astype(float)
+    ny = _session_mask(hour_frac, _NY[0], _NY[1]).astype(float)
     out["sess_asian"] = asian
     out["sess_london"] = london
     out["sess_ny"] = ny
     out["sess_overlap"] = london * ny
 
     session_start = np.where(ny > 0, _NY[0], np.where(london > 0, _LONDON[0], _ASIAN[0]))
+    # `% 24` matters for Asian: its window wraps past midnight
+    # (`_ASIAN = (22, 7)`), so the naive `end - start` would be negative.
     session_len = np.where(
         ny > 0,
         _NY[1] - _NY[0],
-        np.where(london > 0, _LONDON[1] - _LONDON[0], _ASIAN[1] - _ASIAN[0]),
+        np.where(london > 0, _LONDON[1] - _LONDON[0], (_ASIAN[1] - _ASIAN[0]) % 24),
     )
-    out["minutes_into_session"] = np.clip(
-        (hour_frac.to_numpy() - session_start) / np.maximum(session_len, 1.0), 0.0, 1.0
-    )
+    # `% 24` on the numerator too, for the same reason: once past midnight
+    # inside a wrapped Asian session (e.g. hour_frac=3, session_start=22),
+    # the raw difference is negative and would clip to a false 0.0 instead of
+    # reflecting real progress through the session.
+    progress = (hour_frac.to_numpy() - session_start) % 24
+    out["minutes_into_session"] = np.clip(progress / np.maximum(session_len, 1.0), 0.0, 1.0)
     return out
+
+
+def _session_mask(hour_frac: pd.Series, start: float, end: float) -> pd.Series:
+    """Boolean session-window mask over `hour_frac` (UTC hour + minute/60).
+
+    Handles a session that wraps past midnight (`start > end`, e.g. the
+    Asian session's 22->07 UTC window) the same way
+    `engine.domain.regime.session_for` does for its non-vectorized
+    equivalent: OR of "at or after start" / "before end" instead of AND."""
+    if start > end:
+        return (hour_frac >= start) | (hour_frac < end)
+    return (hour_frac >= start) & (hour_frac < end)
 
 
 # ---------------------------------------------------------------------------

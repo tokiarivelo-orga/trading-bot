@@ -72,3 +72,8 @@ class TradeRow(Base):
     regime_adx: Mapped[float | None] = mapped_column(Float, nullable=True)
     regime_session: Mapped[str | None] = mapped_column(String(16), nullable=True)
     transaction_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Signal correlation (order_book/ Phase 5) — join key back to
+    # `signal_decisions`/`order_book_snapshots`. Nullable: every trade
+    # journaled before this field existed, and every manual/API trade, has
+    # no signal behind it.
+    signal_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)

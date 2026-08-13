@@ -199,6 +199,7 @@ class Mt5Client:
                 "close": float(r["close"]),
                 "tick_volume": int(r["tick_volume"]),
                 "spread": int(r["spread"]),
+                "real_volume": int(r["real_volume"]),
             }
             for r in rates
         ]
@@ -252,6 +253,42 @@ class Mt5Client:
             "volume_min": float(info.volume_min),
             "volume_max": float(info.volume_max),
             "volume_step": float(info.volume_step),
+        }
+
+    def order_book(self, symbol: str) -> dict[str, Any] | None:
+        """Level-2 market depth (DOM), when the broker/symbol reports one.
+
+        Most CFD/forex and synthetic-index symbols traded here (XAUUSD via a
+        forex broker, VIX75/Boom via Deriv) do NOT publish real depth — MT5
+        signals this by `market_book_add` returning `False`, or a `None`/empty
+        `market_book_get` result, not by raising. Both are treated as "no
+        depth for this symbol" (`None` return, not an error) — only a genuine
+        connection failure raises `Mt5Error`, matching this class's other
+        methods. `market_book_release` always runs (via `finally`) once
+        `market_book_add` has succeeded, so a subscription is never leaked on
+        an exception from `market_book_get`.
+        """
+        self._require_connection()
+        self._select(symbol)
+        if not mt5.market_book_add(symbol):
+            return None  # broker/symbol doesn't support market depth
+        try:
+            book = mt5.market_book_get(symbol)
+        finally:
+            mt5.market_book_release(symbol)
+        if not book:
+            return None
+        return {
+            "symbol": symbol,
+            "time": int(datetime.now(UTC).timestamp()),
+            "levels": [
+                {
+                    "type": "bid" if b.type == mt5.BOOK_TYPE_BUY else "ask",
+                    "price": float(b.price),
+                    "volume": float(getattr(b, "volume_real", 0) or b.volume),
+                }
+                for b in book
+            ],
         }
 
     # ── trading ─────────────────────────────────────────────────────────

@@ -132,6 +132,39 @@ async def test_on_position_opened_journals_decision_context(service, repository)
     assert record.structure == (("HL", 2397.2, datetime(2026, 7, 10, 13, 30, tzinfo=UTC)),)
 
 
+async def test_on_position_opened_stamps_signal_id_from_the_event(service, repository):
+    """order_book/ Phase 5: `PositionOpened.signal_id` — the join key back
+    to `signal_decisions`/`order_book_snapshots` — must land on the
+    journaled `TradeRecord` unchanged."""
+    event = PositionOpened(
+        symbol="XAUUSD",
+        position_id="1",
+        side="buy",
+        volume=0.1,
+        price=2400.35,
+        sl=2390.0,
+        tp=2420.0,
+        spread_points=25,
+        skill="normal/xauusd/breakout_v1",
+        signal_id="abc123signal",
+    )
+
+    await service.on_position_opened(event)
+
+    record = repository.get("1")
+    assert record.signal_id == "abc123signal"
+
+
+async def test_on_position_opened_defaults_signal_id_to_none(service, repository):
+    """Manual/API trades (and the pre-Phase-5 `opened_event()` fixture,
+    which carries none) must not silently coerce a missing signal_id into
+    something falsy-but-present."""
+    await service.on_position_opened(opened_event())
+
+    record = repository.get("1")
+    assert record.signal_id is None
+
+
 async def test_on_position_closed_updates_existing_record(service, repository):
     await service.on_position_opened(opened_event())
     await service.on_position_closed(closed_event())

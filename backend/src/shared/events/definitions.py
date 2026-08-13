@@ -93,6 +93,11 @@ class PositionOpened(Event):
     regime_session: str | None = None
     """`TradingSession` value at signal time — 'asian'/'london'/'overlap'/
     'new_york'/'off_session'."""
+    signal_id: str | None = None
+    """The `SignalDecision.signal_id` (order_book/ Phase 5) that led to this
+    fill — the join key back to `signal_decisions` and, if the symbol
+    reported depth, `order_book_snapshots`. None for manual/API orders,
+    which have no signal behind them."""
 
 
 @dataclass(frozen=True, kw_only=True)

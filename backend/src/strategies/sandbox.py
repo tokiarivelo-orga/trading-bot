@@ -68,6 +68,10 @@ ALLOWED_IMPORT_MODULES = frozenset(
         "src.strategies.domain.models",
         "src.strategies.domain.fatigue",
         "src.strategies.domain.online_learning",
+        # Pure domain code (dataclasses/enum/numpy/pandas only, no I/O) reused
+        # so generated features share one definition of session/trend/
+        # volatility regime with the engine instead of each copying its own.
+        "src.engine.domain.regime",
     }
 )
 FORBIDDEN_CALL_NAMES = frozenset({"exec", "eval", "compile", "open", "__import__", "input"})

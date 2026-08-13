@@ -170,6 +170,14 @@ class TradeRecordOut(BaseModel):
     mfe_time: int | None = Field(default=None, description="Time of MFE, epoch seconds UTC.")
     mae: float | None = Field(default=None, description="Max adverse excursion.")
     mae_time: int | None = Field(default=None, description="Time of MAE, epoch seconds UTC.")
+    signal_id: str | None = Field(
+        default=None,
+        description=(
+            "The signal_id of the SignalDecision that led to this trade, joinable against "
+            "/activity/... and the order-book snapshot for the same signal; null for trades "
+            "opened before this field existed or via manual/API entry."
+        ),
+    )
 
 
 class CandleOut(BaseModel):

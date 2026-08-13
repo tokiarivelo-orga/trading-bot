@@ -253,6 +253,9 @@ class CandleStreamService:
             if not closed:
                 continue
             await asyncio.to_thread(self._repository.upsert_many, closed, self._account_id)
+            await asyncio.to_thread(
+                self._repository.enrich_missing, symbol, timeframe, self._account_id
+            )
             previous = self._last_emitted.get(key)
             self._last_emitted[key] = closed[-1].time
             if previous is None:
@@ -316,7 +319,7 @@ class CandleStreamService:
         return max(until_boundary + _BOUNDARY_GRACE_S, 5.0)
 
 
-def candle_message(candle: Candle) -> dict[str, float | int | str]:
+def candle_message(candle: Candle) -> dict[str, float | int | str | None]:
     """Wire shape for WS/REST — `time` in epoch seconds (lightweight-charts native)."""
     return {
         "symbol": candle.symbol,
@@ -328,4 +331,7 @@ def candle_message(candle: Candle) -> dict[str, float | int | str]:
         "close": candle.close,
         "tick_volume": candle.tick_volume,
         "spread_points": candle.spread_points,
+        "real_volume": candle.real_volume,
+        "atr_14": candle.atr_14,
+        "day_of_week": candle.day_of_week,
     }

@@ -23,6 +23,15 @@ class CandleRow(Base):
     close: Mapped[float] = mapped_column(Float)
     tick_volume: Mapped[int] = mapped_column(Integer)
     spread_points: Mapped[int] = mapped_column(Integer)
+    # Nullable/go-forward-only: historical rows were written before MT5's
+    # real_volume field was captured, and never had it on the wire.
+    real_volume: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Populated by a separate enrichment pass after the OHLC upsert (see
+    # `candle_repository.py::enrich_missing`), not by the upsert itself —
+    # ATR needs trailing history a single upsert batch doesn't carry. NULL
+    # until that pass reaches this bar.
+    atr_14: Mapped[float | None] = mapped_column(Float, nullable=True)
+    day_of_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class SymbolSpecRow(Base):

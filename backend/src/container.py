@@ -96,6 +96,9 @@ from src.news.adapters.forexfactory import ForexFactoryCalendar
 from src.news.application.news_window_service import NewsWindowService
 from src.news.domain.models import WindowSpec
 from src.news.ports.calendar import NewsCalendarPort
+from src.order_book.adapters.gateway_client import GatewayOrderBookClient
+from src.order_book.adapters.repository import OrderBookSnapshotRepository
+from src.order_book.application.capture import OrderBookCaptureService
 from src.shared.auth.session import SessionTokenIssuer
 from src.shared.config.loaders import (
     load_accounts_config,
@@ -281,6 +284,7 @@ class AccountRuntime:
     silence_monitor: SilenceMonitor
     position_manager: PositionManager
     trade_journal: TradeJournalService
+    order_book_capture: OrderBookCaptureService
     activity_log: ActivityLogService
     risk_manager: RiskManager
     trade_engine: TradeEngine
@@ -454,6 +458,7 @@ def build_container(settings: Settings | None = None) -> Container:
     candle_repository = CandleRepository(session_factory)
     symbol_spec_repository = SymbolSpecRepository(session_factory)
     journal_repository = JournalRepository(session_factory)
+    order_book_repository = OrderBookSnapshotRepository(session_factory)
     activity_log_repository = ActivityLogRepository(session_factory)
     signal_decision_repository = SignalDecisionRepository(session_factory)
     strategy_version_repository = StrategyVersionRepository(session_factory)
@@ -625,6 +630,7 @@ def build_container(settings: Settings | None = None) -> Container:
             candle_repository=candle_repository,
             symbol_spec_repository=symbol_spec_repository,
             journal_repository=journal_repository,
+            order_book_repository=order_book_repository,
             activity_log_repository=activity_log_repository,
             signal_decision_repository=signal_decision_repository,
             strategy_version_repository=strategy_version_repository,
@@ -697,6 +703,7 @@ def build_account_runtime(
     candle_repository: CandleRepository,
     symbol_spec_repository: SymbolSpecRepository,
     journal_repository: JournalRepository,
+    order_book_repository: OrderBookSnapshotRepository,
     activity_log_repository: ActivityLogRepository,
     signal_decision_repository: SignalDecisionRepository,
     strategy_version_repository: StrategyVersionRepository,
@@ -784,6 +791,17 @@ def build_account_runtime(
         review_every_n_trades=review_every_n_trades,
         account_id=account_id,
     )
+    # Order-book (market depth) capture — an independently-testable vertical
+    # slice, not wired into the trade loop yet (a later phase does that).
+    # Gracefully degrades to storing nothing for symbols/brokers that report
+    # no depth (common for OTC CFD/synthetic symbols); see
+    # `order_book/application/capture.py`.
+    order_book_capture = OrderBookCaptureService(
+        gateway=GatewayOrderBookClient(gateway_client),
+        repository=order_book_repository,
+        account_id=account_id,
+    )
+
     event_bus.subscribe(PositionOpened, trade_journal.on_position_opened)
     event_bus.subscribe(PositionClosed, trade_journal.on_position_closed)
     # Accumulates MFE/MAE on open trades bar by bar (OBSERVABILITY_PLAN.md
@@ -893,6 +911,7 @@ def build_account_runtime(
         volatility_config=volatility_config,
         regime_config=regime_config,
         signal_decisions=signal_decisions,
+        order_book_capture=order_book_capture,
         event_bus=event_bus,
         enabled=engine_config.get("enabled", True),
     )
@@ -922,6 +941,7 @@ def build_account_runtime(
         silence_monitor=silence_monitor,
         position_manager=position_manager,
         trade_journal=trade_journal,
+        order_book_capture=order_book_capture,
         activity_log=activity_log,
         risk_manager=risk_manager,
         trade_engine=trade_engine,

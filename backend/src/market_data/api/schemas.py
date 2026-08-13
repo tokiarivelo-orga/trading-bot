@@ -29,6 +29,19 @@ class CandleOut(BaseModel):
     close: float
     tick_volume: int = Field(description="Number of ticks during the bar.")
     spread_points: int = Field(description="Spread in points, as recorded on the bar.")
+    real_volume: int = Field(
+        description=(
+            "Real (non-tick) traded volume during the bar; 0/absent when the "
+            "broker doesn't report it for this symbol."
+        )
+    )
+    atr_14: float | None = Field(
+        description=(
+            "14-period ATR computed from this bar and its trailing history; "
+            "null for bars not yet enriched."
+        )
+    )
+    day_of_week: int | None = Field(description="0=Monday..6=Sunday, UTC.")
 
     model_config = {
         "json_schema_extra": {
@@ -42,6 +55,9 @@ class CandleOut(BaseModel):
                 "close": 2400.90,
                 "tick_volume": 842,
                 "spread_points": 25,
+                "real_volume": 0,
+                "atr_14": 1.85,
+                "day_of_week": 2,
             }
         }
     }

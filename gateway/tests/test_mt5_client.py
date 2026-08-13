@@ -173,3 +173,71 @@ def test_modify_pending_order_real_rejection_still_raises(fake_mt5, monkeypatch)
     fake_mt5.reject_order = True
     with pytest.raises(Mt5Error, match="modify_pending_order"):
         mt5_client.client.modify_pending_order(8699799265, price=2405.0, sl=2390.0, tp=2410.0)
+
+
+# ── order_book (market depth) ──────────────────────────────────────────────
+#
+# Most CFD/forex and synthetic-index symbols this bot trades don't publish
+# real depth — `market_book_add` returning False (or an empty/None
+# `market_book_get`) must degrade to `None`, never raise, and must always
+# release the subscription it successfully added.
+
+
+def test_order_book_returns_none_when_market_book_add_fails(fake_mt5, monkeypatch):
+    monkeypatch.setattr(mt5_client.client, "_connected", True)
+    fake_mt5.market_book_add_succeeds = False
+    assert mt5_client.client.order_book("XAUUSD") is None
+    assert fake_mt5.market_book_add_calls == ["XAUUSD"]
+    # Never subscribed, so nothing to release.
+    assert fake_mt5.market_book_release_calls == []
+
+
+def test_order_book_returns_none_when_book_get_is_empty(fake_mt5, monkeypatch):
+    monkeypatch.setattr(mt5_client.client, "_connected", True)
+    fake_mt5.market_book_add_succeeds = True
+    fake_mt5.market_book_rows = None
+    assert mt5_client.client.order_book("XAUUSD") is None
+    # Subscribed and released even though there was nothing to report.
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
+
+
+def test_order_book_returns_typed_dict_on_success(fake_mt5, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(mt5_client.client, "_connected", True)
+    fake_mt5.market_book_add_succeeds = True
+    fake_mt5.market_book_rows = [
+        SimpleNamespace(type=fake_mt5.BOOK_TYPE_BUY, price=2400.10, volume=5, volume_real=5.5),
+        SimpleNamespace(type=fake_mt5.BOOK_TYPE_SELL, price=2400.35, volume=3, volume_real=0),
+    ]
+
+    book = mt5_client.client.order_book("XAUUSD")
+
+    assert book["symbol"] == "XAUUSD"
+    assert isinstance(book["time"], int)
+    assert book["levels"] == [
+        {"type": "bid", "price": 2400.10, "volume": 5.5},
+        # volume_real falsy (0) falls back to the raw `volume` field.
+        {"type": "ask", "price": 2400.35, "volume": 3.0},
+    ]
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
+
+
+def test_order_book_releases_subscription_even_if_get_raises(fake_mt5, monkeypatch):
+    monkeypatch.setattr(mt5_client.client, "_connected", True)
+    fake_mt5.market_book_add_succeeds = True
+
+    def boom(symbol):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(fake_mt5, "market_book_get", boom)
+
+    with pytest.raises(RuntimeError):
+        mt5_client.client.order_book("XAUUSD")
+
+    assert fake_mt5.market_book_release_calls == ["XAUUSD"]
+
+
+def test_order_book_requires_connection(fake_mt5):
+    with pytest.raises(Mt5Error, match="not logged in"):
+        mt5_client.client.order_book("XAUUSD")

@@ -16,6 +16,7 @@ CANDLE_WIRE = {
     "close": 2400.5,
     "tick_volume": 1000,
     "spread": 25,
+    "real_volume": 42,
 }
 
 
@@ -36,6 +37,7 @@ async def test_get_candles_parses_wire_format():
     assert candle.time == datetime.fromtimestamp(1_752_100_500, tz=UTC)
     assert candle.time.tzinfo is UTC
     assert candle.spread_points == 25
+    assert candle.real_volume == 42
 
 
 async def test_get_candles_forwards_before_param():

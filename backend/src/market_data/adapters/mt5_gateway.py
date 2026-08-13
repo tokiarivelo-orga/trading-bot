@@ -52,6 +52,7 @@ class GatewayMarketData:
                 close=c["close"],
                 tick_volume=c["tick_volume"],
                 spread_points=c["spread"],
+                real_volume=c.get("real_volume", 0),
             )
             for c in payload
         ]

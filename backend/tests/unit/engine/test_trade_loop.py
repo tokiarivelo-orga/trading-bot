@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 
 from src.broker.domain.trading import ExecutionResult, OrderRejected, Position, Side
@@ -398,6 +399,23 @@ class FakeStrategySource:
         return self._strategies.get(name)
 
 
+class FakeOrderBookCapture:
+    """Records every `(signal_id, symbol)` it was asked to capture — used to
+    prove the trade loop calls `OrderBookCapturePort.capture` once per
+    evaluated signal, fired or vetoed (order_book/ Phase 5). `raise_on_capture`
+    lets a test simulate the port violating its own never-raises contract, to
+    prove the engine's fire-and-forget wrapper still swallows it."""
+
+    def __init__(self, raise_on_capture: Exception | None = None):
+        self.calls: list[tuple[str, str]] = []
+        self._raise_on_capture = raise_on_capture
+
+    async def capture(self, *, signal_id: str, symbol: str) -> None:
+        self.calls.append((signal_id, symbol))
+        if self._raise_on_capture is not None:
+            raise self._raise_on_capture
+
+
 def make_engine(
     *,
     market_data=None,
@@ -414,6 +432,7 @@ def make_engine(
     volatility_config=None,
     regime_config=None,
     signal_decisions=None,
+    order_book_capture=None,
     clock=None,
 ):
     market_data = market_data or FakeMarketData(bar_count=context_bars)
@@ -444,6 +463,7 @@ def make_engine(
         volatility_config=volatility_config,
         regime_config=regime_config,
         signal_decisions=signal_decisions,
+        order_book_capture=order_book_capture,
         event_bus=event_bus,
         enabled=enabled,
         context_bars=context_bars,
@@ -1523,3 +1543,76 @@ async def test_account_status_refetched_after_exit_decision_close():
 
     assert len(order_service.opened) == 1
     assert account.calls == 2
+
+
+# ── order-book capture (order_book/ Phase 5) ─────────────────────────────────
+
+
+async def test_order_book_capture_fires_once_on_the_opened_path():
+    capture = FakeOrderBookCapture()
+    engine, order_service, *_ = make_engine(order_book_capture=capture)
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+    # The capture call is fire-and-forget (`asyncio.create_task`, never
+    # awaited on the entry path) — give the event loop a couple of turns to
+    # actually run the scheduled task before asserting on it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(order_service.opened) == 1
+    assert len(capture.calls) == 1
+    signal_id, symbol = capture.calls[0]
+    assert symbol == "XAUUSD"
+    assert signal_id == order_service.signal_ids[0]
+
+
+async def test_order_book_capture_fires_once_on_the_vetoed_path():
+    """Same trigger point as the regime tag and `_record_decision` — a
+    signal that never fills (HTF veto here) still gets exactly one capture
+    attempt, since capture is scheduled right after `_record_decision`, well
+    before the HTF-confirm gate runs."""
+    capture = FakeOrderBookCapture()
+    market_data = FakeMarketData(bar_count=60, downtrend=True)
+    engine, order_service, *_ = make_engine(
+        market_data=market_data, context_bars=60, order_book_capture=capture
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert order_service.opened == []
+    assert len(capture.calls) == 1
+    assert capture.calls[0][1] == "XAUUSD"
+
+
+async def test_order_book_capture_not_scheduled_when_absent():
+    """No `order_book_capture` wired (the default, and the backtest runner's
+    permanent state) — nothing about the entry path should even try to
+    reference it."""
+    engine, order_service, *_ = make_engine()
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+    await asyncio.sleep(0)
+
+    assert len(order_service.opened) == 1
+
+
+async def test_order_book_capture_failure_does_not_propagate_or_change_the_outcome():
+    """`OrderBookCapturePort.capture` is contracted to never raise, but the
+    engine's fire-and-forget wrapper (`_capture_order_book_safely`) must
+    swallow a violation of that contract too — a broken capture port must
+    never crash the trade loop or change/delay the gate outcome."""
+    capture = FakeOrderBookCapture(raise_on_capture=RuntimeError("capture blew up"))
+    engine, order_service, risk_manager, _ = make_engine(order_book_capture=capture)
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+    # Let the failing task run and be swallowed before asserting nothing
+    # leaked out of it.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert len(capture.calls) == 1
+    # The gate outcome is unaffected: the trade still opened normally.
+    assert len(order_service.opened) == 1
+    assert risk_manager.status.trades_today == 1

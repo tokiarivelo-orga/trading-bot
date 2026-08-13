@@ -118,6 +118,12 @@ class TradeRecord:
     `broker/application/order_service.py` around the broker call — the same
     place execution telemetry (Phase 3) is measured. None for trades
     journaled before Phase 6."""
+    # ── Signal correlation (order_book/ Phase 5) ────────────────────────────
+    signal_id: str | None = None
+    """The `SignalDecision.signal_id` that led to this trade, carried
+    through `PositionOpened` — the join key back to `signal_decisions` and,
+    if the symbol reported depth, `order_book_snapshots`. None for trades
+    journaled before this field existed, or opened manually/via the API."""
 
     @property
     def is_open(self) -> bool:

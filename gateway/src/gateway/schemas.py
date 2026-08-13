@@ -41,6 +41,7 @@ class CandleOut(BaseModel):
     close: float
     tick_volume: int
     spread: int  # points, as recorded on the bar
+    real_volume: int  # actual traded volume during the bar, when the broker reports it
 
 
 class TickOut(BaseModel):
@@ -59,6 +60,20 @@ class BrokerSymbolOut(BaseModel):
 class BrokerSymbolPageOut(BaseModel):
     items: list[BrokerSymbolOut]
     total: int  # count after search filtering, before limit/offset — for pagination
+
+
+class OrderBookLevelOut(BaseModel):
+    type: str  # "bid" | "ask"
+    price: float
+    volume: float
+
+
+class OrderBookOut(BaseModel):
+    symbol: str
+    time: int  # epoch seconds UTC when the snapshot was read
+    # Empty (not a 404/422) when the broker/symbol reports no market depth —
+    # true for most CFD/forex and synthetic-index symbols this bot trades.
+    levels: list[OrderBookLevelOut]
 
 
 class SymbolInfoOut(BaseModel):

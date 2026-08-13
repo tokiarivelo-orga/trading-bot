@@ -7,6 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
+from src.journal.api.export import router as export_router
 from src.journal.api.schemas import (
     BotAnalyticsOut,
     CandleOut,
@@ -28,7 +29,6 @@ from src.shared.api.dependencies import AccountRuntimeDep
 
 router = APIRouter(prefix="/accounts/{account_id}/journal", tags=["journal"])
 
-from src.journal.api.export import router as export_router
 router.include_router(export_router)
 
 
@@ -109,6 +109,7 @@ def _trade_out(record: TradeRecord) -> TradeRecordOut:
         mfe_time=int(record.mfe_time.timestamp()) if record.mfe_time else None,
         mae=record.mae,
         mae_time=int(record.mae_time.timestamp()) if record.mae_time else None,
+        signal_id=record.signal_id,
     )
 
 

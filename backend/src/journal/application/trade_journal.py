@@ -95,6 +95,7 @@ class TradeJournalService:
             regime_trend=event.regime_trend,
             regime_adx=event.regime_adx,
             regime_session=event.regime_session,
+            signal_id=event.signal_id,
             # Excursion starts at zero, not None: the trade has now been
             # measured (the market simply hasn't moved yet), which is what
             # distinguishes it from a pre-Phase-3 row that never was.
@@ -139,7 +140,12 @@ class TradeJournalService:
             return
         for trade in open_trades:
             updated = extend_excursion(
-                Excursion(mfe=trade.mfe or 0.0, mae=trade.mae or 0.0, mfe_time=trade.mfe_time, mae_time=trade.mae_time),
+                Excursion(
+                    mfe=trade.mfe or 0.0,
+                    mae=trade.mae or 0.0,
+                    mfe_time=trade.mfe_time,
+                    mae_time=trade.mae_time,
+                ),
                 side=trade.side,
                 open_price=trade.open_price,
                 high=candle.high,
@@ -171,7 +177,12 @@ class TradeJournalService:
         # inside a single candle real MFE/MAE numbers — no candle ever closed
         # during its life, so this is its only measurement.
         excursion = finalize_excursion(
-            Excursion(mfe=existing.mfe or 0.0, mae=existing.mae or 0.0, mfe_time=existing.mfe_time, mae_time=existing.mae_time),
+            Excursion(
+                mfe=existing.mfe or 0.0,
+                mae=existing.mae or 0.0,
+                mfe_time=existing.mfe_time,
+                mae_time=existing.mae_time,
+            ),
             side=existing.side,
             open_price=existing.open_price,
             close_price=event.close_price,

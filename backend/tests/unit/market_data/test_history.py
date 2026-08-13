@@ -54,6 +54,11 @@ class FakeCandleRepository:
     def __init__(self, bars: list[Candle] | None = None) -> None:
         self.stored: list[Candle] = []
         self._bars = bars or []  # ascending by time, as get_latest/get_before promise
+        self.enrich_calls: list[tuple] = []
+
+    def enrich_missing(self, symbol, timeframe, account_id: str = "default", **kwargs) -> int:
+        self.enrich_calls.append((symbol, timeframe, account_id))
+        return 0
 
     def upsert_many(self, candles, account_id: str = "default") -> int:
         candles = list(candles)
@@ -357,6 +362,31 @@ async def test_reconcile_gaps_swallows_gateway_unavailable_per_pair():
     )
 
     assert stored == {}
+
+
+async def test_backfill_without_start_calls_enrich_missing():
+    origin = datetime(2026, 1, 1, tzinfo=UTC)
+    bars = make_bars(250, start=origin)
+    market_data = FakePagingMarketData(bars)
+    repository = FakeCandleRepository()
+    service = CandleHistoryService(market_data, repository)
+
+    await service.backfill("XAUUSD", Timeframe.M5, 100)
+
+    assert repository.enrich_calls == [("XAUUSD", Timeframe.M5, "default")]
+
+
+async def test_backfill_with_start_calls_enrich_missing():
+    origin = datetime(2026, 1, 1, tzinfo=UTC)
+    bars = make_bars(250, start=origin)
+    market_data = FakePagingMarketData(bars)
+    repository = FakeCandleRepository()
+    service = CandleHistoryService(market_data, repository)
+
+    await service.backfill("XAUUSD", Timeframe.M5, 100, start=origin)
+
+    # Wired once, after the paged loop completes (not once per page).
+    assert repository.enrich_calls == [("XAUUSD", Timeframe.M5, "default")]
 
 
 async def test_backfill_with_start_stops_when_broker_history_runs_out():

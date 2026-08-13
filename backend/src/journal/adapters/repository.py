@@ -194,7 +194,13 @@ class JournalRepository:
         accumulator reads (Phase 3). Runs once per closed candle per symbol,
         hence the narrow column list rather than `get_open`'s full rows."""
         query = select(
-            TradeRow.id, TradeRow.side, TradeRow.open_price, TradeRow.mfe, TradeRow.mfe_time, TradeRow.mae, TradeRow.mae_time
+            TradeRow.id,
+            TradeRow.side,
+            TradeRow.open_price,
+            TradeRow.mfe,
+            TradeRow.mfe_time,
+            TradeRow.mae,
+            TradeRow.mae_time,
         ).where(
             TradeRow.close_time.is_(None),
             TradeRow.symbol == symbol,
@@ -204,13 +210,25 @@ class JournalRepository:
             rows = session.execute(query).all()
         return [
             OpenTradeExcursion(
-                id=row.id, side=row.side, open_price=row.open_price, mfe=row.mfe, mfe_time=datetime.fromtimestamp(row.mfe_time, tz=UTC) if row.mfe_time else None, mae=row.mae, mae_time=datetime.fromtimestamp(row.mae_time, tz=UTC) if row.mae_time else None
+                id=row.id,
+                side=row.side,
+                open_price=row.open_price,
+                mfe=row.mfe,
+                mfe_time=datetime.fromtimestamp(row.mfe_time, tz=UTC) if row.mfe_time else None,
+                mae=row.mae,
+                mae_time=datetime.fromtimestamp(row.mae_time, tz=UTC) if row.mae_time else None,
             )
             for row in rows
         ]
 
     def update_excursion(
-        self, trade_id: str, mfe: float, mae: float, mfe_time: datetime | None, mae_time: datetime | None, account_id: str = "default"
+        self,
+        trade_id: str,
+        mfe: float,
+        mae: float,
+        mfe_time: datetime | None,
+        mae_time: datetime | None,
+        account_id: str = "default",
     ) -> None:
         """Writes just the two excursion columns of one trade.
 
@@ -223,7 +241,12 @@ class JournalRepository:
             session.execute(
                 update(TradeRow)
                 .where(TradeRow.id == trade_id, TradeRow.account_id == account_id)
-                .values(mfe=mfe, mae=mae, mfe_time=int(mfe_time.timestamp()) if mfe_time else None, mae_time=int(mae_time.timestamp()) if mae_time else None)
+                .values(
+                    mfe=mfe,
+                    mae=mae,
+                    mfe_time=int(mfe_time.timestamp()) if mfe_time else None,
+                    mae_time=int(mae_time.timestamp()) if mae_time else None,
+                )
             )
             session.commit()
 
@@ -448,6 +471,7 @@ def _to_row(record: TradeRecord, account_id: str) -> TradeRow:
         regime_adx=record.regime_adx,
         regime_session=record.regime_session,
         transaction_cost=record.transaction_cost,
+        signal_id=record.signal_id,
     )
 
 
@@ -502,4 +526,5 @@ def _to_domain(row: TradeRow) -> TradeRecord:
         regime_adx=row.regime_adx,
         regime_session=row.regime_session,
         transaction_cost=row.transaction_cost,
+        signal_id=row.signal_id,
     )

@@ -44,6 +44,7 @@ from src.market_data.api.ws import bind_auth, bind_candle_stream, bind_live_cand
 from src.market_data.application.candle_stream import poll_lookback_for
 from src.market_data.domain.models import Timeframe
 from src.news.api.routes import router as news_router
+from src.order_book.api.routes import router as order_book_router
 from src.shared.auth.api.routes import router as auth_router
 from src.shared.auth.dependencies import require_session
 from src.shared.config.settings import Settings, load_yaml_config
@@ -206,6 +207,13 @@ OPENAPI_TAGS = [
         "(`backend/src/skills/news/*.yaml`); this API only reports that state for the UI.",
     },
     {
+        "name": "order-book",
+        "description": "Per-signal market-depth snapshots captured at the moment a trading "
+        "signal fires, for AI-training data export. Gracefully degrades to storing nothing "
+        "when the broker/symbol reports no depth (common for OTC CFD/synthetic symbols) — "
+        "absence of a row is expected, not an error.",
+    },
+    {
         "name": "observability",
         "description": "`GET /metrics` — Prometheus exposition of engine loop duration, gateway "
         "RTT, signals/min, veto counts by reason, open positions, and WS client count "
@@ -324,6 +332,7 @@ app.include_router(model_training_router, dependencies=_SESSION_REQUIRED)
 app.include_router(indicators_router, dependencies=_SESSION_REQUIRED)
 app.include_router(skills_router, dependencies=_SESSION_REQUIRED)
 app.include_router(news_router, dependencies=_SESSION_REQUIRED)
+app.include_router(order_book_router, dependencies=_SESSION_REQUIRED)
 
 
 class HealthOut(BaseModel):

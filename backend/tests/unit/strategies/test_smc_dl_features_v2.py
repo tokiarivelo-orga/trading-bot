@@ -13,12 +13,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.engine.domain.regime import RegimeConfig
 from src.strategies.generated.smc_dl_features_v2 import (
+    _ASIAN,
+    _LONDON,
+    _NY,
     FEATURE_NAMES,
     MIN_M5_BARS,
     compute_features_batch,
     compute_features_live,
 )
+
+_BARS_PER_DAY = 288  # 24h / 5min
 
 
 def _series(n: int, start: float = 2000.0, seed: int = 0, freq: str = "5min") -> pd.DataFrame:
@@ -210,6 +216,104 @@ def test_missing_higher_timeframes_do_not_crash() -> None:
 def test_bounded_features_stay_bounded(bounded: str) -> None:
     frame = compute_features_batch(_series(600, seed=3)).dropna()
     assert frame[bounded].between(0.0, 1.0).all()
+
+
+# ---------------------------------------------------------------------------
+# session boundaries — reconciled with engine.domain.regime.RegimeConfig
+# (OBSERVABILITY_PLAN.md Phase 6): this module used to hardcode its own,
+# slightly different (_ASIAN=(0, 8), _NY=(12, 21)) session hours instead of
+# reading `RegimeConfig()`'s defaults ((22, 7) wrapping, and (16, 21)). That
+# is a real change to the sess_asian/sess_ny/sess_overlap feature *values*,
+# not a no-op refactor — flagged prominently in this phase's report because
+# it can shift the already-trained smc_dl_m5_v2 model's feature
+# distributions.
+# ---------------------------------------------------------------------------
+def test_session_boundaries_are_read_from_regime_config() -> None:
+    cfg = RegimeConfig()
+    assert (cfg.session_asian_start_hour, cfg.session_asian_end_hour) == _ASIAN
+    assert (cfg.session_london_start_hour, cfg.session_london_end_hour) == _LONDON
+    assert (cfg.session_new_york_start_hour, cfg.session_new_york_end_hour) == _NY
+
+
+def test_session_columns_reflect_regime_config_boundaries() -> None:
+    m5 = _series(550)
+    frame = compute_features_batch(m5)
+
+    def at(day: int, hour: int) -> pd.Series:
+        return frame.iloc[day * _BARS_PER_DAY + hour * 12]
+
+    # Day 0 is used for the warmup rows (`MIN_M5_BARS = 150` -> before
+    # ~12:30 UTC on day 0), so these checks use day 1 to stay past warmup.
+    london_only = at(1, 10)  # 10:00 UTC -> inside London (7-16) only
+    assert london_only["sess_london"] == 1.0
+    assert london_only["sess_asian"] == 0.0
+    assert london_only["sess_ny"] == 0.0
+
+    ny_only = at(1, 18)  # 18:00 UTC -> inside New York (16-21) only
+    assert ny_only["sess_ny"] == 1.0
+    assert ny_only["sess_london"] == 0.0
+    assert ny_only["sess_asian"] == 0.0
+
+    off_session = at(1, 21)  # 21:00 UTC -> NY just ended, Asian not yet started
+    assert off_session["sess_london"] == 0.0
+    assert off_session["sess_ny"] == 0.0
+    assert off_session["sess_asian"] == 0.0
+
+    # London (7,16) and New York (16,21) are adjacent under RegimeConfig's
+    # defaults, not overlapping (London's exclusive upper bound is exactly
+    # New York's inclusive lower bound), so `sess_overlap = london * ny` is
+    # now structurally always 0.0 — a further consequence of this switch
+    # worth flagging alongside the Asian/NY boundary change itself.
+    assert frame["sess_overlap"].dropna().eq(0.0).all()
+
+
+def test_session_asian_handles_the_midnight_wrap() -> None:
+    """RegimeConfig's Asian session wraps past midnight (22 -> 07 UTC),
+    unlike the old hardcoded (0, 8) window this file used to use. A naive
+    `hour >= start & hour < end` mask matches nothing when `start > end`, so
+    both sides of the wrap must be proven to read as Asian."""
+    m5 = _series(550)
+    frame = compute_features_batch(m5)
+
+    late_evening = frame.iloc[0 * _BARS_PER_DAY + 23 * 12]  # 23:00 UTC, day 1
+    assert late_evening["sess_asian"] == 1.0
+
+    early_morning = frame.iloc[1 * _BARS_PER_DAY + 3 * 12]  # 03:00 UTC, day 2
+    assert early_morning["sess_asian"] == 1.0
+
+    # `minutes_into_session` must also wrap: 03:00 is 5h into the 9h
+    # (22:00->07:00) Asian window, i.e. progress ~5/9, not a naive
+    # `(hour - session_start)` clipped to 0.0 for an hour numerically less
+    # than the session's start hour.
+    assert 0.4 < early_morning["minutes_into_session"] < 0.7
+
+
+# ---------------------------------------------------------------------------
+# sandbox regression — the point of this phase
+# ---------------------------------------------------------------------------
+def test_regime_config_import_is_allowlisted_in_the_sandbox() -> None:
+    """This module is on `strategies.sandbox.ALLOWED_IMPORT_MODULES` so
+    top-level strategy files (`smc_dl_m5_v2.py`, etc.) can import it (module
+    docstring) — but this module's own source is never independently fed
+    through `_static_scan`/`validate_and_load`; only a top-level strategy
+    file is, and it is imported at runtime (via `_safe_import`) by whichever
+    already-validated strategy pulls it in. Feeding this file's raw source
+    into `_static_scan` directly is therefore not the real regression to
+    guard (and would spuriously fail on its pre-existing, unrelated
+    `from __future__ import annotations` line, which `_static_scan` also
+    rejects — that line is fine in practice because it never runs through
+    the static scan in production).
+
+    The regression that matters is narrower: the *new*
+    `from src.engine.domain.regime import RegimeConfig` line must itself be
+    on the allowlist, and the real end-to-end path — a top-level strategy
+    file that imports this module, e.g. `smc_dl_m5_v2.py` — must still pass
+    `validate_and_load` (covered by
+    `test_smc_dl_m5_v2.py::test_passes_the_strategy_sandbox`)."""
+    from src.strategies.sandbox import ALLOWED_IMPORT_MODULES, _static_scan
+
+    assert "src.engine.domain.regime" in ALLOWED_IMPORT_MODULES
+    assert _static_scan("from src.engine.domain.regime import RegimeConfig\n") == []
 
 
 # ---------------------------------------------------------------------------

@@ -306,6 +306,7 @@ class OrderService:
                 regime_trend=regime_trend,
                 regime_adx=regime_adx,
                 regime_session=regime_session,
+                signal_id=signal_id,
             )
         )
         return result

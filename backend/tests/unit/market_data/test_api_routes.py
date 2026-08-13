@@ -28,6 +28,7 @@ CANDLE_WIRE = {
     "close": 2400.5,
     "tick_volume": 1000,
     "spread": 25,
+    "real_volume": 42,
 }
 
 SYMBOLS_WIRE = [
@@ -82,6 +83,7 @@ async def test_candles_omits_before_when_not_requested():
         )
     assert response.status_code == 200
     assert response.json()[0]["time"] == 1_752_100_500
+    assert response.json()[0]["real_volume"] == 42
 
 
 async def test_candles_forwards_before_as_epoch_seconds():

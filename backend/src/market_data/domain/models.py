@@ -90,6 +90,17 @@ class Candle:
     close: float
     tick_volume: int
     spread_points: int
+    # Actual traded volume during the bar (distinct from tick_volume, a tick
+    # count) — 0 when the broker doesn't report it for this symbol, and NULL
+    # in the DB for any bar stored before this field existed.
+    real_volume: int = 0
+    # Trailing 14-period ATR and UTC day-of-week (0=Monday..6=Sunday),
+    # computed by a separate enrichment pass after the bar is stored (see
+    # `adapters/candle_repository.py::enrich_missing`) — NULL until that pass
+    # reaches this bar, since ATR needs trailing history the OHLC upsert
+    # alone doesn't have.
+    atr_14: float | None = None
+    day_of_week: int | None = None
 
     @property
     def close_time(self) -> datetime:

@@ -18,6 +18,7 @@ two bots entering on different timeframes get different veto timeframes.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import math
@@ -45,6 +46,7 @@ from src.engine.domain.volatility import (
 from src.engine.ports.strategy_source import StrategySourcePort
 from src.market_data.domain.models import Candle, MarketDataUnavailable, SymbolInfo, Timeframe
 from src.market_data.ports.market_data import MarketDataPort
+from src.order_book.ports.capture import OrderBookCapturePort
 from src.shared.events.bus import EventBus
 from src.shared.events.definitions import (
     CandleClosed,
@@ -192,6 +194,7 @@ class TradeEngine:
         volatility_config: VolatilityConfig,
         regime_config: RegimeConfig | None = None,
         signal_decisions: SignalDecisionSinkPort | None = None,
+        order_book_capture: OrderBookCapturePort | None = None,
         event_bus: EventBus | None = None,
         enabled: bool = True,
         context_bars: int = DEFAULT_CONTEXT_BARS,
@@ -226,6 +229,13 @@ class TradeEngine:
         # backtest engine / unit test can run without a database; when absent
         # the human-readable log lines below are all that's produced.
         self._signal_decisions = signal_decisions
+        # Order-book capture (order_book/ Phase 5) — optional, like
+        # `signal_decisions`, so the many bare `TradeEngine(...)` tests and
+        # the backtest runner (which must never hit a live gateway) don't
+        # need it. Fired-and-forgotten per evaluated signal in
+        # `_enter_for_bot` via `_capture_order_book_safely`, never awaited on
+        # the entry path itself.
+        self._order_book_capture = order_book_capture
         self._event_bus = event_bus
         self._enabled = enabled
         self._context_bars = context_bars
@@ -509,6 +519,22 @@ class TradeEngine:
             return
         await self._signal_decisions.record_checks(signal_id, tuple(checks))
 
+    async def _capture_order_book_safely(self, signal_id: str, symbol: str) -> None:
+        """Runs as a fire-and-forget task (see the `asyncio.create_task` call
+        site above) — this is what makes "order-book capture never crashes
+        the trade loop" true even if `OrderBookCapturePort.capture`'s own
+        never-raises contract is ever violated by a future change. Belt and
+        suspenders: `OrderBookCaptureService.capture` already swallows
+        `OrderBookUnavailable` and empty-book cases itself. Only ever
+        scheduled when `self._order_book_capture is not None` (checked at
+        the `asyncio.create_task` call site)."""
+        try:
+            await self._order_book_capture.capture(signal_id=signal_id, symbol=symbol)  # type: ignore[union-attr]
+        except Exception:
+            logger.exception(
+                "order-book capture task failed for signal_id=%s symbol=%s", signal_id, symbol
+            )
+
     async def _enter_for_bot(
         self,
         symbol: str,
@@ -631,6 +657,15 @@ class TradeEngine:
             created_at=now,
             regime=entry_regime,
         )
+        # Order-book capture (order_book/ Phase 5) — fire-and-forget, same
+        # moment `entry_regime` is stamped and recorded above: every
+        # evaluated signal gets a capture attempt, fired or vetoed, so the
+        # snapshot exists regardless of how this signal's gates resolve.
+        # `asyncio.create_task`, never `await`, is load-bearing here — a live
+        # gateway round-trip must never sit between signal detection and
+        # order placement.
+        if self._order_book_capture is not None:
+            asyncio.create_task(self._capture_order_book_safely(signal_id, symbol))
 
         if strategy.spec.close_on_opposite_signal:
             open_positions, closed = await self._close_opposite_position(

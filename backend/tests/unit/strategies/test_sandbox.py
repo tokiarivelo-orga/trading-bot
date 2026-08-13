@@ -225,6 +225,38 @@ class NumpyUser:
     assert instance is not None
 
 
+def test_strategy_importing_regime_config_loads():
+    # `src.engine.domain.regime` (pure dataclasses/enum/numpy/pandas, no I/O)
+    # was added to ALLOWED_IMPORT_MODULES so generated strategy code can
+    # share the engine's session/trend/volatility regime definitions instead
+    # of each hardcoding its own (OBSERVABILITY_PLAN.md Phase 6 reconciling
+    # `smc_dl_features_v2.py`'s session hours with `RegimeConfig`).
+    code = """
+from src.engine.domain.regime import RegimeConfig
+from src.strategies.domain.models import Direction, MarketContext, Signal, StrategySpec
+
+
+class RegimeAware:
+    def __init__(self):
+        self.spec = StrategySpec(
+            name="regime_aware", version=1, symbols=("XAUUSD",), entry_timeframe="M5",
+            confirmation_timeframes=(), params={},
+        )
+        self._cfg = RegimeConfig()
+
+    def evaluate(self, ctx: MarketContext):
+        m5 = ctx.candles.get("M5")
+        if m5 is None or len(m5) < 5:
+            return None
+        if self._cfg.session_london_start_hour < self._cfg.session_london_end_hour:
+            return Signal(direction=Direction.BUY, sl_points=5.0, tp_points=10.0, reason="test")
+        return None
+"""
+    instance, errors = validate_and_load(code)
+    assert errors == ()
+    assert instance is not None
+
+
 def test_empty_symbols_rejected_before_smoke_test():
     code = """
 from src.strategies.domain.models import MarketContext, StrategySpec

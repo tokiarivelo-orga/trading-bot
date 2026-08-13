@@ -142,6 +142,9 @@ class CandleHistoryService:
             stored = await asyncio.to_thread(
                 self._repository.upsert_many, candles, self._account_id
             )
+            await asyncio.to_thread(
+                self._repository.enrich_missing, symbol, timeframe, self._account_id
+            )
             logger.info("backfilled %s bars for %s %s", stored, symbol, timeframe.value)
             return stored
 
@@ -159,6 +162,15 @@ class CandleHistoryService:
             if oldest <= start or len(page) < count:
                 break
             before = oldest
+        # One pass after the loop (rather than one per page) starts
+        # enrichment at the oldest newly-stored bar without paying for
+        # `enrich_missing`'s lookup on every page. A range wider than its
+        # `batch` default (500 bars) won't be fully enriched by the time
+        # this returns — `scripts/backfill_candle_enrichment.py` is the
+        # repeat-until-zero pass for catching the rest up.
+        await asyncio.to_thread(
+            self._repository.enrich_missing, symbol, timeframe, self._account_id
+        )
         logger.info(
             "backfilled %s bars for %s %s back to %s", total, symbol, timeframe.value, start
         )

@@ -33,10 +33,15 @@ class FakeMarketData:
 class FakeRepository:
     def __init__(self):
         self.stored = []
+        self.enrich_calls: list[tuple] = []
 
     def upsert_many(self, candles, account_id: str = "default"):
         self.stored.extend(candles)
         return len(list(candles))
+
+    def enrich_missing(self, symbol, timeframe, account_id: str = "default", **kwargs) -> int:
+        self.enrich_calls.append((symbol, timeframe, account_id))
+        return 0
 
 
 class FakeBroadcaster:
@@ -108,6 +113,17 @@ async def test_new_closed_bar_is_emitted_persisted_broadcast(setup, candle_facto
     assert message["type"] == "candle_closed"
     assert message["candle"]["close"] == 2405.0
     assert message["candle"]["time"] == int(utc(2026, 7, 10, 14, 0).timestamp())
+
+
+async def test_poll_once_calls_enrich_missing_for_polled_symbol(setup, candle_factory):
+    service, market_data, repository, broadcaster, events = setup
+    market_data.candles[("XAUUSD", Timeframe.M5)] = [
+        candle_factory(utc(2026, 7, 10, 13, 55)),
+    ]
+
+    await service.poll_once(now=utc(2026, 7, 10, 14, 3))
+
+    assert repository.enrich_calls == [("XAUUSD", Timeframe.M5, "default")]
 
 
 async def test_poll_once_populates_recent_candle_cache_with_latest_bar(candle_factory):

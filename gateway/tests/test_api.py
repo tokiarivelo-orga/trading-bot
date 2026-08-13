@@ -43,8 +43,18 @@ def test_candles_shape(api):
     candles = response.json()
     assert len(candles) == 3
     first = candles[0]
-    assert set(first) == {"time", "open", "high", "low", "close", "tick_volume", "spread"}
+    assert set(first) == {
+        "time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "tick_volume",
+        "spread",
+        "real_volume",
+    }
     assert first["time"] % 300 == 0
+    assert isinstance(first["real_volume"], int)
 
 
 def test_candles_accepts_m1_timeframe(api):
@@ -275,3 +285,40 @@ def test_trading_requires_login(api):
     detail = response.json()["detail"]
     assert "not logged in" in detail["message"]
     assert detail["retcode"] is None
+
+
+def test_order_book_returns_200_with_empty_levels_when_unsupported(api, fake_mt5):
+    # The graceful-degradation contract holds at the transport boundary too:
+    # a symbol/broker with no market depth is 200 + empty levels, never a
+    # 404/422 — most CFD/forex and synthetic-index symbols this bot trades
+    # fall into this case.
+    _login(api)
+    fake_mt5.market_book_add_succeeds = False
+    response = api.get("/order_book", params={"symbol": "XAUUSD"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["symbol"] == "XAUUSD"
+    assert body["levels"] == []
+
+
+def test_order_book_returns_levels_when_supported(api, fake_mt5):
+    from types import SimpleNamespace
+
+    _login(api)
+    fake_mt5.market_book_add_succeeds = True
+    fake_mt5.market_book_rows = [
+        SimpleNamespace(type=fake_mt5.BOOK_TYPE_BUY, price=2400.10, volume=5, volume_real=5.5),
+        SimpleNamespace(type=fake_mt5.BOOK_TYPE_SELL, price=2400.35, volume=3, volume_real=3.0),
+    ]
+    response = api.get("/order_book", params={"symbol": "XAUUSD"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["levels"] == [
+        {"type": "bid", "price": 2400.10, "volume": 5.5},
+        {"type": "ask", "price": 2400.35, "volume": 3.0},
+    ]
+
+
+def test_order_book_requires_login(api):
+    response = api.get("/order_book", params={"symbol": "XAUUSD"})
+    assert response.status_code == 502

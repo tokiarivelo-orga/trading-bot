@@ -72,6 +72,8 @@ class FakeMt5:
     SYMBOL_FILLING_IOC = 2
     TRADE_RETCODE_DONE = 10009
     TRADE_RETCODE_NO_CHANGES = 10025
+    BOOK_TYPE_BUY = 1
+    BOOK_TYPE_SELL = 2
 
     def __init__(self) -> None:
         self.reject_login = False
@@ -91,6 +93,13 @@ class FakeMt5:
         self.volume_min = 0.01
         self.volume_max = 100.0
         self.volume_step = 0.01
+        # Market depth (DOM) — most symbols/brokers don't support it, so the
+        # default mirrors that: `market_book_add` fails and no book exists.
+        # Tests exercising `order_book()` flip these on directly.
+        self.market_book_add_succeeds = False
+        self.market_book_rows: list[SimpleNamespace] | None = None
+        self.market_book_add_calls: list[str] = []
+        self.market_book_release_calls: list[str] = []
 
     def initialize(self) -> bool:
         return True
@@ -148,6 +157,7 @@ class FakeMt5:
                 "close": 2400.5 + i,
                 "tick_volume": 1000 + i,
                 "spread": 25,
+                "real_volume": 500 + i,
             }
             for i in range(min(count, 3))
         ]
@@ -168,6 +178,7 @@ class FakeMt5:
                 "close": 2300.5,
                 "tick_volume": 900,
                 "spread": 20,
+                "real_volume": 450,
             }
             for t in times
         ]
@@ -190,6 +201,17 @@ class FakeMt5:
             volume_max=self.volume_max,
             volume_step=self.volume_step,
         )
+
+    def market_book_add(self, symbol) -> bool:
+        self.market_book_add_calls.append(symbol)
+        return self.market_book_add_succeeds
+
+    def market_book_get(self, symbol):
+        return self.market_book_rows
+
+    def market_book_release(self, symbol) -> bool:
+        self.market_book_release_calls.append(symbol)
+        return True
 
     def order_send(self, request):
         if self.reject_order:
