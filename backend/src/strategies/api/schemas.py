@@ -80,6 +80,23 @@ class StrategySpecSnapshotOut(BaseModel):
     )
 
 
+def _coerce_unrecognized_indicators(raw_entries: list[Any]) -> list[str]:
+    """`unrecognized_indicators` must be `list[str]`, but some persisted specs
+    hold `{"name": ..., "description": ...}` objects instead (hand-inserted
+    versions, or a future extraction bug) — stringify those rather than
+    500ing the whole versions listing on one bad row."""
+    coerced: list[str] = []
+    for entry in raw_entries:
+        if isinstance(entry, str):
+            coerced.append(entry)
+        elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            description = entry.get("description")
+            coerced.append(f"{entry['name']}: {description}" if description else entry["name"])
+        else:
+            coerced.append(str(entry))
+    return coerced
+
+
 def _coerce_legacy_spec_dict(raw: dict[str, Any]) -> dict[str, Any]:
     """Upgrade a `StrategyVersion.spec` dict written before indicators were
     structured (plain `indicators: list[str]`, no `unrecognized_indicators`/
@@ -89,7 +106,7 @@ def _coerce_legacy_spec_dict(raw: dict[str, Any]) -> dict[str, Any]:
     indicators = raw.get("indicators", [])
     if indicators and all(isinstance(entry, str) for entry in indicators):
         parsed: list[dict[str, Any]] = []
-        unrecognized: list[str] = list(raw.get("unrecognized_indicators", []))
+        unrecognized: list[Any] = list(raw.get("unrecognized_indicators", []))
         for token in indicators:
             match = _LEGACY_INDICATOR_TOKEN_RE.match(str(token).strip())
             if match:
@@ -97,8 +114,13 @@ def _coerce_legacy_spec_dict(raw: dict[str, Any]) -> dict[str, Any]:
                 parsed.append({"type": family, "period": period, "label": token})
             else:
                 unrecognized.append(str(token))
-        return {**raw, "indicators": parsed, "unrecognized_indicators": unrecognized}
-    return raw
+        raw = {**raw, "indicators": parsed, "unrecognized_indicators": unrecognized}
+    return {
+        **raw,
+        "unrecognized_indicators": _coerce_unrecognized_indicators(
+            raw.get("unrecognized_indicators", [])
+        ),
+    }
 
 
 class StrategyVersionOut(BaseModel):
