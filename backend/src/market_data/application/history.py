@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 
 from src.market_data.adapters.candle_repository import CandleRepository
@@ -124,6 +124,57 @@ class CandleHistoryService:
             if cached is not None:
                 return cached
             raise
+
+    async def get_range(
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
+    ) -> list[Candle]:
+        """Every stored bar for `symbol`/`timeframe` with open time in
+        `[start, end)`, oldest first — read-only, DB-only (no gateway
+        fallback). Backs the JSON path of `GET .../candles/export`, whose
+        caller is expected to keep the range narrow enough to materialize in
+        one response (see `_MAX_JSON_EXPORT_ROWS` in `api/export.py`); a
+        wider range should use `export_range` (CSV/streamed) instead. Returns
+        `[]` for an empty range or a symbol/timeframe with no stored history
+        — this is the "no candles found" case, not an error."""
+        return await asyncio.to_thread(
+            self._repository.get_range, symbol, timeframe, start, end, self._account_id
+        )
+
+    async def export_range(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+        page_size: int = 2000,
+    ) -> AsyncIterator[Candle]:
+        """Every stored bar for `symbol`/`timeframe` with open time in
+        `[start, end)`, oldest first, read page by page instead of one
+        `get_range` call — backs the CSV path of `GET .../candles/export` via
+        `StreamingResponse`, so exporting a symbol's entire M1 history never
+        materializes the whole range as one in-memory list. Pages forward by
+        moving the cursor to just past the last bar returned each page
+        (rather than by `timeframe.seconds`, since MN's bar spacing isn't a
+        fixed number of seconds); a page shorter than `page_size` ends the
+        stream."""
+        cursor = start
+        while True:
+            page = await asyncio.to_thread(
+                self._repository.get_range_page,
+                symbol,
+                timeframe,
+                cursor,
+                end,
+                page_size,
+                self._account_id,
+            )
+            if not page:
+                return
+            for candle in page:
+                yield candle
+            if len(page) < page_size:
+                return
+            cursor = page[-1].time + timedelta(seconds=1)
 
     async def backfill(
         self, symbol: str, timeframe: Timeframe, count: int, start: datetime | None = None

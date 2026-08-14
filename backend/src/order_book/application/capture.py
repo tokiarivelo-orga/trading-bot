@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from src.order_book.adapters.repository import OrderBookSnapshotRepository
 from src.order_book.domain.models import OrderBookSnapshot, OrderBookUnavailable
@@ -53,3 +54,19 @@ class OrderBookCaptureService:
         hadn't run yet for that signal. Backs `GET .../order-book/signal/
         {signal_id}`."""
         return await asyncio.to_thread(self._repository.get_for_signal, signal_id, self._account_id)
+
+    async def list_for_account(
+        self,
+        symbol: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[tuple[str, OrderBookSnapshot]]:
+        """Every snapshot captured for this account, newest first, optionally
+        filtered by `symbol` and/or a `[since, until]` capture-time window —
+        backs `GET .../order-book/export`. Sparse by design (see module
+        docstring), so this is a plain filtered read rather than a paginated/
+        streamed one, unlike `market_data`'s candle export. Returns `[]`,
+        never raises, when nothing matches."""
+        return await asyncio.to_thread(
+            self._repository.list_for_account, self._account_id, symbol, since, until
+        )

@@ -63,6 +63,24 @@ class CandleOut(BaseModel):
     }
 
 
+class CandleExportOut(BaseModel):
+    """One page's worth of `GET .../candles/export?format=json` — an envelope
+    around `CandleOut` rows rather than a bare list, so the response carries
+    the echoed range/count a training pipeline needs to confirm it got what
+    it asked for without re-parsing the query string."""
+
+    symbol: str = Field(description="Trading symbol, e.g. 'XAUUSD'.")
+    timeframe: str = Field(
+        description="One of 'M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1', 'MN'."
+    )
+    from_time: int = Field(
+        description="Start of the exported range, epoch seconds UTC (inclusive)."
+    )
+    to_time: int = Field(description="End of the exported range, epoch seconds UTC (exclusive).")
+    count: int = Field(description="Number of candles in `candles` — 0 for an empty range.")
+    candles: list[CandleOut] = Field(description="Bars in the range, oldest first.")
+
+
 class SymbolInfoOut(BaseModel):
     """Live tradable-instrument spec, as reported by the broker terminal."""
 

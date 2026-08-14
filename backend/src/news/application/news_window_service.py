@@ -11,6 +11,16 @@ Two cadences, deliberately separate:
 `active_window_for()` is synchronous and reads only the last-fetched cache —
 it's called from `NewsSkillSelector.select_all()` on the engine's hot path
 (every M5 close) and must never block on I/O.
+
+Phase 6 Parts B/C: `refresh()` additionally upserts every fetched batch into
+the durable `news_events` table via `NewsEventRepository` (`self._events`
+itself is untouched — still the in-memory, zero-I/O cache
+`active_window_for()` reads), and `_check_transitions()` stamps
+`balance_before`/`balance_after` on each event's row at the moment it
+publishes `NewsWindowEntered`/`NewsWindowExited`. Both are optional
+(`repository`/`account_service` default to `None`) so this service stays
+constructible without a database in unit tests that only exercise window
+math, exactly as before.
 """
 
 from __future__ import annotations
@@ -19,6 +29,7 @@ import asyncio
 import contextlib
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from src.news.domain.models import (
     NewsCalendarUnavailable,
@@ -30,6 +41,11 @@ from src.news.domain.models import (
 from src.news.ports.calendar import NewsCalendarPort
 from src.shared.events.bus import EventBus
 from src.shared.events.definitions import NewsWindowEntered, NewsWindowExited
+
+if TYPE_CHECKING:
+    from src.broker.application.account_service import AccountService
+    from src.news.adapters.repository import NewsEventRecord, NewsEventRepository
+    from src.news.domain.models import ImpactLevel
 
 logger = logging.getLogger(__name__)
 
@@ -45,15 +61,36 @@ class NewsWindowService:
         window_specs: dict[str, WindowSpec],
         event_bus: EventBus,
         refresh_interval_s: float | None = None,
+        repository: NewsEventRepository | None = None,
     ) -> None:
         self._calendar = calendar
         self._config = config
         self._window_specs = window_specs
         self._event_bus = event_bus
         self._refresh_interval_s = refresh_interval_s or config.refresh_minutes * 60
+        self._repository = repository
         self._events: list[NewsEvent] = []
         self._active_keys: set[tuple[str, str]] = set()  # (event_name, skill_name)
+        # Event time for each currently-active (event_name, skill_name) key —
+        # populated on entry, consumed on exit, so `_check_transitions` can
+        # stamp `balance_after` on the same `(name, time)` row it stamped
+        # `balance_before` on, without `NewsWindowExited` needing to carry
+        # the event's scheduled time itself (Phase 6 Part C).
+        self._entered_event_times: dict[tuple[str, str], datetime] = {}
+        # Balance source for Part C — process-wide `NewsWindowService` is
+        # constructed before any per-account `AccountService` exists
+        # (container.py builds account runtimes afterward), so this is
+        # injected post-construction via `set_account_service` rather than
+        # taken as a constructor arg.
+        self._account_service: AccountService | None = None
         self._task: asyncio.Task[None] | None = None
+
+    def set_account_service(self, account_service: AccountService) -> None:
+        """Injects the balance source for Part C's `balance_before`/
+        `balance_after` stamping. Optional: if never called (e.g. in unit
+        tests), stamping is silently skipped — this is enrichment, not core
+        function (see module docstring)."""
+        self._account_service = account_service
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._run(), name="news-calendar-refresh")
@@ -69,6 +106,26 @@ class NewsWindowService:
         now = now or datetime.now(UTC)
         self._events = await self._calendar.fetch_upcoming(_DAYS_AHEAD)
         logger.info("news calendar refreshed: %d events", len(self._events))
+        if self._repository is not None:
+            # Persistence is a pure addition — `self._events` (the
+            # zero-I/O cache `active_window_for()` reads) is already set
+            # above regardless of whether this succeeds.
+            try:
+                await asyncio.to_thread(self._repository.save_many, self._events)
+            except Exception:
+                logger.exception("failed to persist news calendar events")
+
+    async def list_events(
+        self, start: datetime, end: datetime, impact: ImpactLevel | None = None
+    ) -> list[NewsEventRecord]:
+        """Persisted event history in `[start, end]`, each with its row id
+        and `balance_before`/`balance_after` — backs `GET
+        /accounts/{account_id}/news/events`. `[]` (not an error) when
+        persistence isn't wired (`repository` is `None`, e.g. a unit test
+        constructing this service directly) or nothing matches."""
+        if self._repository is None:
+            return []
+        return await asyncio.to_thread(self._repository.list_records_between, start, end, impact)
 
     def upcoming(
         self, days_ahead: int = _DAYS_AHEAD, now: datetime | None = None
@@ -158,14 +215,47 @@ class NewsWindowService:
                 symbols,
                 close_all,
             )
+            self._entered_event_times[key] = window.event.time
+            await self._stamp_balance(window.event.name, window.event.time, entering=True)
 
         for event_name, skill_name in self._active_keys - current_keys:
             spec = self._window_specs.get(skill_name)
             symbols = spec.symbols if spec else ()
             await self._event_bus.publish(NewsWindowExited(event_name=event_name, symbols=symbols))
             logger.info("news window exited: %s skill=%s", event_name, skill_name)
+            event_time = self._entered_event_times.pop((event_name, skill_name), None)
+            if event_time is not None:
+                await self._stamp_balance(event_name, event_time, entering=False)
 
         self._active_keys = current_keys
+
+    async def _stamp_balance(self, name: str, time: datetime, *, entering: bool) -> None:
+        """Writes `balance_before` (on entry) or `balance_after` (on exit)
+        for the `(name, time)` news_events row — Phase 6 Part C. Never
+        raises: a missing repository/account service, an unreachable
+        gateway, or a not-yet-persisted row are all silently skipped
+        (logged at most) rather than blocking the 30s transition-check loop
+        or losing a live news window. `balance_after` staying null forever
+        (window never cleanly exits — e.g. a process restart mid-window) is
+        an accepted, expected outcome of that same "never block" contract."""
+        if self._repository is None or self._account_service is None:
+            return
+        try:
+            status = await self._account_service.status()
+        except Exception:
+            logger.exception("could not read account balance for news balance stamp")
+            return
+        account = status.get("account")
+        balance = account["balance"] if account else None
+        if balance is None:
+            return
+        write = (
+            self._repository.set_balance_before if entering else self._repository.set_balance_after
+        )
+        try:
+            await asyncio.to_thread(write, name, time, balance)
+        except Exception:
+            logger.exception("failed to persist news event balance stamp")
 
     def _resolve_window_spec(self, event: NewsEvent) -> WindowSpec | None:
         matched_skill: str | None = None

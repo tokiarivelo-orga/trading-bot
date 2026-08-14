@@ -39,10 +39,12 @@ from src.container import build_container
 from src.engine.api.routes import router as engine_router
 from src.indicators.api.routes import router as indicators_router
 from src.journal.api.routes import router as journal_router
+from src.market_data.api.export import router as market_data_export_router
 from src.market_data.api.routes import router as market_data_router
 from src.market_data.api.ws import bind_auth, bind_candle_stream, bind_live_candle, sio
 from src.market_data.application.candle_stream import poll_lookback_for
 from src.market_data.domain.models import Timeframe
+from src.news.api.routes import events_router as news_events_router
 from src.news.api.routes import router as news_router
 from src.order_book.api.routes import router as order_book_router
 from src.shared.auth.api.routes import router as auth_router
@@ -204,7 +206,12 @@ OPENAPI_TAGS = [
         "The engine reacts to news windows internally: `NewsSkillSelector` blocks/overrides "
         "entries and the trade engine flattens positions on `NewsWindowEntered` when the "
         "matched news skill's `pre_event.close_all` requests it "
-        "(`backend/src/skills/news/*.yaml`); this API only reports that state for the UI.",
+        "(`backend/src/skills/news/*.yaml`); this API only reports that state for the UI. "
+        "`/news/...` routes are process-wide (one calendar, shared across every account); "
+        "`/accounts/{account_id}/news/events` (Phase 6) additionally serves the persisted "
+        "`news_events` history — survives restarts, unlike `/news/upcoming`'s in-memory "
+        "cache — including the account balance captured immediately before/after each "
+        "event's news window.",
     },
     {
         "name": "order-book",
@@ -316,6 +323,7 @@ app.include_router(auth_router)
 app.include_router(accounts_router, dependencies=_SESSION_REQUIRED)
 app.include_router(account_router, dependencies=_SESSION_REQUIRED)
 app.include_router(market_data_router, dependencies=_SESSION_REQUIRED)
+app.include_router(market_data_export_router, dependencies=_SESSION_REQUIRED)
 app.include_router(trading_router, dependencies=_SESSION_REQUIRED)
 app.include_router(broker_spread_router, dependencies=_SESSION_REQUIRED)
 app.include_router(journal_router, dependencies=_SESSION_REQUIRED)
@@ -332,6 +340,7 @@ app.include_router(model_training_router, dependencies=_SESSION_REQUIRED)
 app.include_router(indicators_router, dependencies=_SESSION_REQUIRED)
 app.include_router(skills_router, dependencies=_SESSION_REQUIRED)
 app.include_router(news_router, dependencies=_SESSION_REQUIRED)
+app.include_router(news_events_router, dependencies=_SESSION_REQUIRED)
 app.include_router(order_book_router, dependencies=_SESSION_REQUIRED)
 
 

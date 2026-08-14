@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from src.journal.domain.analytics import (
     compute_bot_analytics,
+    compute_daily_pnl,
     compute_regime_analytics,
     compute_symbol_analytics,
 )
@@ -541,3 +542,87 @@ def test_regime_analytics_win_rate_and_profit_factor_within_bucket():
 
 def test_regime_analytics_empty_input_returns_empty_list():
     assert compute_regime_analytics([]) == []
+
+
+# ── compute_daily_pnl (Phase 6 Part A) ───────────────────────────────────────
+
+
+def test_daily_pnl_groups_by_close_date_across_two_days():
+    trades = [
+        # Day 1 (2026-07-10): one win, one loss.
+        make_record(
+            "1",
+            open_time=utc(2026, 7, 10, 8, 0),
+            close_time=utc(2026, 7, 10, 9, 0),
+            profit=10.0,
+        ),
+        make_record(
+            "2",
+            open_time=utc(2026, 7, 10, 10, 0),
+            close_time=utc(2026, 7, 10, 11, 0),
+            profit=-4.0,
+        ),
+        # Day 2 (2026-07-11): two wins.
+        make_record(
+            "3",
+            open_time=utc(2026, 7, 11, 8, 0),
+            close_time=utc(2026, 7, 11, 9, 0),
+            profit=6.0,
+        ),
+        make_record(
+            "4",
+            open_time=utc(2026, 7, 11, 10, 0),
+            close_time=utc(2026, 7, 11, 11, 0),
+            profit=3.0,
+        ),
+        # Still open — no close_time, must be excluded from every day.
+        make_record("5", open_time=utc(2026, 7, 11, 12, 0)),
+    ]
+
+    results = compute_daily_pnl(trades)
+
+    assert [r.date for r in results] == [date(2026, 7, 10), date(2026, 7, 11)]
+
+    day1 = results[0]
+    assert day1.pnl == 6.0  # 10.0 - 4.0
+    assert day1.trade_count == 2
+    assert day1.win_count == 1
+    assert day1.loss_count == 1
+    assert day1.breakeven_count == 0
+    assert day1.win_rate == 0.5
+    assert day1.gross_profit == 10.0
+    assert day1.gross_loss == 4.0
+    assert day1.profit_factor == 2.5
+    assert day1.avg_win == 10.0
+    assert day1.avg_loss == 4.0
+    assert day1.largest_win == 10.0
+    assert day1.largest_loss == -4.0
+
+    day2 = results[1]
+    assert day2.pnl == 9.0  # 6.0 + 3.0
+    assert day2.trade_count == 2
+    assert day2.win_count == 2
+    assert day2.loss_count == 0
+    assert day2.win_rate == 1.0
+    assert day2.profit_factor is None  # no losses that day
+    assert day2.avg_loss == 0.0
+
+
+def test_daily_pnl_sorted_ascending_regardless_of_input_order():
+    trades = [
+        make_record("1", close_time=utc(2026, 7, 12, 9, 0), profit=1.0),
+        make_record("2", close_time=utc(2026, 7, 10, 9, 0), profit=2.0),
+        make_record("3", close_time=utc(2026, 7, 11, 9, 0), profit=3.0),
+    ]
+
+    results = compute_daily_pnl(trades)
+
+    assert [r.date for r in results] == [
+        date(2026, 7, 10),
+        date(2026, 7, 11),
+        date(2026, 7, 12),
+    ]
+
+
+def test_daily_pnl_empty_input_returns_empty_list():
+    assert compute_daily_pnl([]) == []

@@ -93,6 +93,7 @@ from src.market_data.application.live_candle import LiveCandleService
 from src.market_data.domain.models import Candle, Timeframe
 from src.news.adapters.finnhub import FinnhubCalendar
 from src.news.adapters.forexfactory import ForexFactoryCalendar
+from src.news.adapters.repository import NewsEventRepository
 from src.news.application.news_window_service import NewsWindowService
 from src.news.domain.models import WindowSpec
 from src.news.ports.calendar import NewsCalendarPort
@@ -271,6 +272,16 @@ class AccountRuntime:
     event_bus: EventBus
     market_data: GatewayMarketData
     candle_history: CandleHistoryService
+    # Direct repository handles (rather than only the higher-level
+    # `candle_history`/symbol-spec-consuming services above) — for read paths
+    # that need *stored* history/broker facts without any live-gateway
+    # round trip, e.g. `journal/api/export.py`'s training-dataset export,
+    # which reads a bounded historical window and must never depend on the
+    # gateway being reachable. Both are the same shared, account-agnostic
+    # instances `build_container` already constructs and passes into this
+    # function; this just also exposes them on the runtime.
+    candle_repository: CandleRepository
+    symbol_spec_repository: SymbolSpecRepository
     candle_stream: CandleStreamService
     live_candle: LiveCandleService
     ws_broadcaster: WsBroadcaster
@@ -459,6 +470,7 @@ def build_container(settings: Settings | None = None) -> Container:
     symbol_spec_repository = SymbolSpecRepository(session_factory)
     journal_repository = JournalRepository(session_factory)
     order_book_repository = OrderBookSnapshotRepository(session_factory)
+    news_event_repository = NewsEventRepository(session_factory)
     activity_log_repository = ActivityLogRepository(session_factory)
     signal_decision_repository = SignalDecisionRepository(session_factory)
     strategy_version_repository = StrategyVersionRepository(session_factory)
@@ -611,6 +623,7 @@ def build_container(settings: Settings | None = None) -> Container:
         config=news_config,
         window_specs=window_specs,
         event_bus=_FanOutEventBus(list(event_buses.values())),
+        repository=news_event_repository,
     )
     skill_selector: SkillSelectorPort = NewsSkillSelector(
         normal_selector=normal_skill_selector,
@@ -651,6 +664,18 @@ def build_container(settings: Settings | None = None) -> Container:
             silence_config=alerting_config.silence,
         )
         accounts[account_cfg.id] = runtime
+
+    # Phase 6 Part C: `NewsWindowService` is process-wide and constructed
+    # before any `AccountRuntime` exists (see the comment above
+    # `event_buses`), so its balance source for `balance_before`/
+    # `balance_after` stamping can only be wired in after the accounts loop
+    # above. Uses the primary account's balance — `news_events` has no
+    # per-account column (one calendar, shared across every account; see
+    # `NewsEventRepository`'s module docstring), so there is only room for
+    # one account's balance per row, and the primary account is this
+    # process's existing "one canonical account" convention (see
+    # `Container._primary`).
+    news_window_service.set_account_service(accounts[primary_account_id].account)
 
     for runtime in accounts.values():
         event_bus = runtime.event_bus
@@ -807,6 +832,7 @@ def build_account_runtime(
     # Accumulates MFE/MAE on open trades bar by bar (OBSERVABILITY_PLAN.md
     # Phase 3); the handler ignores every timeframe but M5 itself.
     event_bus.subscribe(CandleClosed, trade_journal.on_candle_closed)
+
     # `tradingbot_open_positions` gauge (OBSERVABILITY_PLAN.md Phase 5) — driven
     # off the event bus, not counted at scrape time, so it also picks up
     # broker-side closes/opens `ReconciliationService` republishes for
@@ -928,6 +954,8 @@ def build_account_runtime(
         event_bus=event_bus,
         market_data=market_data,
         candle_history=candle_history,
+        candle_repository=candle_repository,
+        symbol_spec_repository=symbol_spec_repository,
         candle_stream=candle_stream,
         live_candle=live_candle,
         ws_broadcaster=ws_broadcaster,

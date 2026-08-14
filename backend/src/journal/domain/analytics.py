@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import date
 
 from src.journal.domain.models import TradeAnalyticsRecord, TradeRecord
 
@@ -414,3 +415,80 @@ def compute_regime_analytics(trades: list[AnalyticsRecord]) -> list[RegimeAnalyt
             )
         )
     return sorted(results, key=lambda r: (r.bot_name, r.dimension, r.bucket))
+
+
+@dataclass(frozen=True, kw_only=True)
+class DailyPnl:
+    """One trading day's realized P&L — a read-time aggregation over closed
+    trades grouped by `date(close_time)` (Phase 6). `engine/application/
+    risk_manager.py` already accumulates a live `_daily_pnl` running total
+    purely to drive the daily-loss circuit breaker, but never persists or
+    exposes it historically; since every trade's `close_time`/`profit` is
+    already durable in the `trades` table, a daily P&L *history* is this —
+    a query over existing data, not a new write path or table. No
+    `account_id` field, matching `SymbolAnalytics`/`BotAnalytics`/
+    `RegimeAnalytics`: account membership is implicit in which account's
+    trades the caller passed in (`TradeJournalService` scopes the
+    repository query to one account before this function ever runs)."""
+
+    date: date
+    """The trading day, `close_time.date()` in UTC — matches the tz every
+    other timestamp in this module is stored/read as."""
+    pnl: float
+    """Sum of realized profit across trades closed this day."""
+    trade_count: int
+    """Trades closed this day. This bucket has no "open" concept — a still-
+    open trade has no `close_time` to group by, so it is excluded here the
+    same way `_closed()` excludes it from every other aggregation."""
+    win_count: int
+    loss_count: int
+    breakeven_count: int
+    win_rate: float  # 0..1, over trade_count. 0.0 if trade_count is 0.
+    gross_profit: float
+    gross_loss: float  # positive number
+    profit_factor: float | None  # None when there are no losing trades that day
+    avg_win: float
+    avg_loss: float  # positive number
+    largest_win: float
+    largest_loss: float  # negative or zero
+
+
+def compute_daily_pnl(trades: list[AnalyticsRecord]) -> list[DailyPnl]:
+    """One entry per calendar date with at least one trade closed that day,
+    grouped by `date(close_time)` instead of by symbol/bot/regime — the
+    read-time analogue of `RiskManager._daily_pnl`'s live accumulator,
+    except sourced from the durable `trades` table so it survives restarts
+    and covers any historical range, not just "today". Same convention as
+    `compute_symbol_analytics`/`compute_bot_analytics`: date-range filtering
+    (`open_from`/`open_to`) happens at the repository layer before `trades`
+    reaches this function, not in here. Sorted by date ascending (oldest
+    first) — the natural order for a P&L history chart."""
+    closed = _closed(trades)
+    by_date: dict[date, list[AnalyticsRecord]] = defaultdict(list)
+    for t in closed:
+        by_date[t.close_time.date()].append(t)  # type: ignore[union-attr]
+
+    results = []
+    for day, day_trades in by_date.items():
+        wins, losses, breakeven = _wins_losses_breakeven(day_trades)
+        gross_profit = sum(t.profit or 0.0 for t in wins)
+        gross_loss = -sum(t.profit or 0.0 for t in losses)
+        results.append(
+            DailyPnl(
+                date=day,
+                pnl=sum(t.profit or 0.0 for t in day_trades),
+                trade_count=len(day_trades),
+                win_count=len(wins),
+                loss_count=len(losses),
+                breakeven_count=len(breakeven),
+                win_rate=len(wins) / len(day_trades) if day_trades else 0.0,
+                gross_profit=gross_profit,
+                gross_loss=gross_loss,
+                profit_factor=_profit_factor(gross_profit, gross_loss),
+                avg_win=gross_profit / len(wins) if wins else 0.0,
+                avg_loss=gross_loss / len(losses) if losses else 0.0,
+                largest_win=max((t.profit or 0.0 for t in wins), default=0.0),
+                largest_loss=min((t.profit or 0.0 for t in losses), default=0.0),
+            )
+        )
+    return sorted(results, key=lambda d: d.date)

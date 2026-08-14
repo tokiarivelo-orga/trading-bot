@@ -11,6 +11,7 @@ from src.ai.adapters import orm as ai_orm  # noqa: F401
 from src.indicators.adapters import orm as indicators_orm  # noqa: F401
 from src.journal.adapters import orm as journal_orm  # noqa: F401
 from src.market_data.adapters import orm as market_data_orm  # noqa: F401
+from src.news.adapters import orm as news_orm  # noqa: F401
 from src.shared.config.settings import Settings
 from src.shared.db.base import Base
 from src.strategies.adapters import orm as strategies_orm  # noqa: F401

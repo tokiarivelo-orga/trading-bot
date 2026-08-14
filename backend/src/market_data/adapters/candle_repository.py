@@ -162,6 +162,39 @@ class CandleRepository:
             rows = session.execute(query).all()
         return _to_domain_many(symbol, timeframe, rows)
 
+    def get_range_page(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start: datetime,
+        end: datetime,
+        limit: int,
+        account_id: str = "default",
+    ) -> list[Candle]:
+        """Same bounds as `get_range` (`[start, end)`, oldest first) but capped
+        to `limit` rows — the paging primitive `CandleHistoryService.export_range`
+        uses to stream a wide date range (e.g. a symbol's full M1 history) to
+        `GET /market-data/candles/export?format=csv` page by page instead of
+        materializing the whole range with one `get_range` call. Callers page
+        forward by re-calling with `start` moved to just past the last
+        returned bar's `time` (see `export_range`); a page shorter than
+        `limit` means the range is exhausted."""
+        query = (
+            select(*_CANDLE_COLUMNS)
+            .where(
+                CandleRow.symbol == symbol,
+                CandleRow.timeframe == timeframe.value,
+                CandleRow.time >= int(start.timestamp()),
+                CandleRow.time < int(end.timestamp()),
+                CandleRow.account_id == account_id,
+            )
+            .order_by(CandleRow.time.asc())
+            .limit(limit)
+        )
+        with self._session_factory() as session:
+            rows = session.execute(query).all()
+        return _to_domain_many(symbol, timeframe, rows)
+
     def enrich_missing(
         self,
         symbol: str,

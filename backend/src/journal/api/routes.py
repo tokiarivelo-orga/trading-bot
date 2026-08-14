@@ -11,6 +11,7 @@ from src.journal.api.export import router as export_router
 from src.journal.api.schemas import (
     BotAnalyticsOut,
     CandleOut,
+    DailyPnlOut,
     DecisionContextOut,
     EquityPointOut,
     IndicatorReadingOut,
@@ -23,7 +24,7 @@ from src.journal.api.schemas import (
     ZoneOut,
 )
 from src.journal.application.trade_journal import TradeJournalService
-from src.journal.domain.analytics import BotAnalytics, RegimeAnalytics, SymbolAnalytics
+from src.journal.domain.analytics import BotAnalytics, DailyPnl, RegimeAnalytics, SymbolAnalytics
 from src.journal.domain.models import CandleSnapshot, TradeRecord
 from src.shared.api.dependencies import AccountRuntimeDep
 
@@ -369,6 +370,25 @@ def _regime_analytics_out(a: RegimeAnalytics) -> RegimeAnalyticsOut:
     )
 
 
+def _daily_pnl_out(d: DailyPnl) -> DailyPnlOut:
+    return DailyPnlOut(
+        date=d.date,
+        pnl=d.pnl,
+        trade_count=d.trade_count,
+        win_count=d.win_count,
+        loss_count=d.loss_count,
+        breakeven_count=d.breakeven_count,
+        win_rate=d.win_rate,
+        gross_profit=d.gross_profit,
+        gross_loss=d.gross_loss,
+        profit_factor=d.profit_factor,
+        avg_win=d.avg_win,
+        avg_loss=d.avg_loss,
+        largest_win=d.largest_win,
+        largest_loss=d.largest_loss,
+    )
+
+
 @router.get(
     "/analytics/symbols",
     response_model=list[SymbolAnalyticsOut],
@@ -462,3 +482,33 @@ async def get_regime_analytics(
         open_from=open_from, open_to=open_to
     )
     return [_regime_analytics_out(a) for a in analytics]
+
+
+@router.get(
+    "/analytics/daily",
+    response_model=list[DailyPnlOut],
+    summary="Get daily realized P&L history",
+    description=(
+        "Aggregates every journaled trade grouped by calendar date (`date(close_time)`, UTC): "
+        "realized P&L, trade/win/loss counts, win rate, profit factor, and average win/loss "
+        "per day. This is a read-time aggregation over the same `trades` table every other "
+        "analytics endpoint reads — not a persisted daily-P&L table — and is the historical "
+        "counterpart to `engine/application/risk_manager.py`'s in-memory `_daily_pnl`, which "
+        "only drives the live daily-loss circuit breaker and resets at day rollover without "
+        "ever being persisted. One entry per date with at least one trade closed that day, "
+        "sorted oldest first — plots directly as a daily P&L history chart, and is the "
+        "self-service way to answer 'how many days has this account actually breached its "
+        "daily loss limit' without grepping the activity log."
+    ),
+)
+async def get_daily_pnl(
+    account: AccountRuntimeDep,
+    open_from: int | None = Query(
+        default=None, description="Only trades opened at/after this epoch-seconds UTC."
+    ),
+    open_to: int | None = Query(
+        default=None, description="Only trades opened at/before this epoch-seconds UTC."
+    ),
+) -> list[DailyPnlOut]:
+    daily = await _service(account).get_daily_pnl(open_from=open_from, open_to=open_to)
+    return [_daily_pnl_out(d) for d in daily]

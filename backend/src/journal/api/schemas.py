@@ -4,6 +4,8 @@ serialized over this API."""
 
 from __future__ import annotations
 
+from datetime import date as date_
+
 from pydantic import BaseModel, Field
 
 
@@ -500,4 +502,165 @@ class RegimeAnalyticsOut(BaseModel):
     )
     total_profit: float = Field(
         description="Sum of realized profit across closed trades in this bucket."
+    )
+
+
+class DailyPnlOut(BaseModel):
+    """One trading day's realized P&L — one entry per calendar date with at
+    least one trade closed that day, on `GET /journal/analytics/daily`.
+    Sourced by aggregating the durable `trades` table at read time, not a
+    persisted table of its own — the historical counterpart to
+    `engine/application/risk_manager.py`'s in-memory `_daily_pnl`, which
+    only drives the live daily-loss circuit breaker and is never persisted."""
+
+    date: date_ = Field(description="The trading day, UTC, serialized as 'YYYY-MM-DD'.")
+    pnl: float = Field(description="Sum of realized profit across trades closed this day.")
+    trade_count: int = Field(description="Trades closed this day.")
+    win_count: int = Field(description="Closed trades with profit > 0.")
+    loss_count: int = Field(description="Closed trades with profit < 0.")
+    breakeven_count: int = Field(description="Closed trades with profit == 0.")
+    win_rate: float = Field(description="win_count / trade_count, 0..1. 0 if no trades.")
+    gross_profit: float = Field(description="Sum of profit across winning trades only.")
+    gross_loss: float = Field(
+        description="Sum of |profit| across losing trades only, as a positive number."
+    )
+    profit_factor: float | None = Field(
+        description="gross_profit / gross_loss for this day. Null when there are no losing "
+        "trades that day (undefined rather than infinite)."
+    )
+    avg_win: float = Field(description="gross_profit / win_count. 0 if no wins.")
+    avg_loss: float = Field(
+        description="gross_loss / loss_count, as a positive number. 0 if no losses."
+    )
+    largest_win: float = Field(description="Largest single-trade profit this day, or 0.")
+    largest_loss: float = Field(description="Largest single-trade loss this day (negative), or 0.")
+
+
+class DatasetOrderBookLevelOut(BaseModel):
+    """One price level of the order-book snapshot captured at the moment a
+    trade's signal fired (`order_book/adapters/repository.py`)."""
+
+    side: str = Field(description="'bid' or 'ask'.")
+    price: float = Field(description="Price at this level.")
+    volume: float = Field(description="Volume/size resting at this level.")
+
+
+class DatasetRowOut(BaseModel):
+    """One training example on `GET .../journal/export/dataset` (`format=json`):
+    a closed trade joined to the SMC v2 feature vector (`strategies/generated/
+    smc_dl_features_v2.py`) computed at its entry bar, the v1 triple-barrier
+    label computed over the same candle history, and every enrichment field
+    the dataset export can attach. Fields sourced from data this trade simply
+    doesn't have (no `signal_id`, no regime tags, no captured order-book
+    depth) are null rather than fabricated — see each field's description."""
+
+    trade_id: str = Field(description="Broker position ticket, as a string.")
+    symbol: str = Field(description="Broker symbol, e.g. 'XAUUSD'.")
+    strategy_version: str | None = Field(
+        description="e.g. 'breakout_v1:v1'; null for manually placed trades."
+    )
+    timestamp_entry: str = Field(description="ISO-8601 open time.")
+    timestamp_exit: str | None = Field(description="ISO-8601 close time; null while open.")
+
+    tp_prob: float = Field(
+        description="TP-hit probability parsed from the strategy's logged `reason` string "
+        "(e.g. 'DL Buy (tp=0.85, ...)'). 0.0 when the reason carries no such probability."
+    )
+    bull_prob: float = Field(description="Bullish-model probability parsed the same way.")
+    bear_prob: float = Field(description="Bearish-model probability parsed the same way.")
+    model_decision: str = Field(description="'BUY', 'SELL', or 'SKIP' — parsed from `reason`.")
+
+    actual_direction: int = Field(
+        description="Direction the v1 triple-barrier label resolved to at the entry bar: "
+        "1 (long TP hit first), -1 (short TP hit first), 0 (neither)."
+    )
+    hit_tp_before_sl: int = Field(
+        description="1 if the v1 triple-barrier label's take-profit was reached before its "
+        "stop-loss from the entry bar, else 0."
+    )
+    profit_r: float | None = Field(
+        description=(
+            "This trade's realized profit expressed as a multiple of its initial risk: "
+            "profit / (|open_price - sl| * volume * contract_size) — the same formula "
+            "`backtest/adapters/bookkeeper.py` uses to compute `BacktestTrade.r_multiple`, "
+            "reused here so live and backtest R-multiples mean the same thing. Null when "
+            "`sl` is null (risk undefined) or this symbol's contract size was never synced "
+            "into `symbol_specs` (see `POST /market-data/backfill`)."
+        )
+    )
+    mfe_atr: float = Field(
+        description="Max favorable excursion from the v1 label's forward barrier walk, in "
+        "ATR units (distinct from `TradeRecord.mfe`, which is in price units)."
+    )
+    mae_atr: float = Field(
+        description="Max adverse excursion from the v1 label's forward barrier walk, in ATR "
+        "units (distinct from `TradeRecord.mae`, which is in price units)."
+    )
+    bars_to_exit: int = Field(
+        description="M5 bars from the entry bar to the label's resolution (TP/SL hit, or the "
+        "labeling horizon if neither)."
+    )
+
+    entry_price: float = Field(description="Fill price at entry.")
+    exit_price: float | None = Field(default=None, description="Fill price at close.")
+    sl: float | None = Field(default=None, description="Stop-loss price at entry.")
+    tp: float | None = Field(default=None, description="Take-profit price at entry.")
+    spread: int = Field(description="Spread in points at entry.")
+    slippage: float | None = Field(
+        default=None, description="Execution slippage in price units; see `TradeRecordOut`."
+    )
+    profit_raw: float | None = Field(default=None, description="Realized P/L in account currency.")
+    volume: float = Field(description="Lot size.")
+
+    model_correct: int = Field(
+        description="1 if `model_decision` agrees with `actual_direction`, else 0."
+    )
+    confidence_calibration: float = Field(
+        description="tp_prob - hit_tp_before_sl — how far the logged TP-probability was from "
+        "the label's realized outcome; near 0 is well-calibrated."
+    )
+
+    regime_volatility: str | None = Field(default=None, description="See `TradeRecordOut`.")
+    regime_volatility_percentile: float | None = Field(
+        default=None, description="See `TradeRecordOut`."
+    )
+    regime_trend: str | None = Field(default=None, description="See `TradeRecordOut`.")
+    regime_adx: float | None = Field(default=None, description="See `TradeRecordOut`.")
+    regime_session: str | None = Field(default=None, description="See `TradeRecordOut`.")
+    transaction_cost: float | None = Field(default=None, description="See `TradeRecordOut`.")
+    signal_id: str | None = Field(default=None, description="See `TradeRecordOut`.")
+
+    real_volume: int | None = Field(
+        default=None,
+        description="Actual traded volume on the M5 candle the entry features were computed "
+        "from. Null when the broker never reported it for this bar (see `market_data.domain."
+        "models.Candle.real_volume`).",
+    )
+    atr_14: float | None = Field(
+        default=None,
+        description="Trailing 14-period ATR stored on that same M5 candle. Null when the "
+        "enrichment pass hadn't reached this bar yet.",
+    )
+    day_of_week: int | None = Field(
+        default=None, description="UTC day of week on that candle, 0=Monday..6=Sunday."
+    )
+
+    order_book_levels: list[DatasetOrderBookLevelOut] | None = Field(
+        default=None,
+        description=(
+            "Market-depth levels captured at the moment this trade's signal fired, if any. "
+            "Null whenever `signal_id` is null, or when a snapshot was never captured for it "
+            "— the normal, expected case for most symbols (order-book capture gracefully "
+            "degrades to storing nothing for OTC/synthetic symbols that report no depth). "
+            "Never fabricated or empty-but-present; see `order_book/domain/models.py`."
+        ),
+    )
+
+    features: dict[str, float] = Field(
+        description=(
+            "The scale-free SMC v2 features at the entry bar, keyed by name — see "
+            "`strategies.generated.smc_dl_features_v2.FEATURE_NAMES` for the full, canonical "
+            "list and what each one means. Not enumerated as individual schema fields since "
+            "the feature set is versioned in that module, not here."
+        )
     )

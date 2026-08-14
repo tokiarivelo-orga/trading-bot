@@ -15,9 +15,11 @@ from typing import Literal
 from src.journal.adapters.repository import JournalRepository, OrderField, Outcome
 from src.journal.domain.analytics import (
     BotAnalytics,
+    DailyPnl,
     RegimeAnalytics,
     SymbolAnalytics,
     compute_bot_analytics,
+    compute_daily_pnl,
     compute_regime_analytics,
     compute_symbol_analytics,
 )
@@ -301,6 +303,17 @@ class TradeJournalService:
             account_id=self._account_id,
         )
         return compute_regime_analytics(trades)
+
+    async def get_daily_pnl(
+        self, open_from: int | None = None, open_to: int | None = None
+    ) -> list[DailyPnl]:
+        trades = await asyncio.to_thread(
+            self._repository.get_all_for_analytics,
+            open_from=open_from,
+            open_to=open_to,
+            account_id=self._account_id,
+        )
+        return compute_daily_pnl(trades)
 
     async def search_trades(
         self,

@@ -245,3 +245,43 @@ async def test_analytics_endpoints_filter_by_open_from_and_open_to(api):
     assert len(res_bots.json()) == 1
     bot = res_bots.json()[0]
     assert bot["trade_count"] == 2
+
+
+# ── daily P&L (Phase 6 Part A) ───────────────────────────────────────────────
+
+
+async def test_daily_pnl_aggregates_the_seeded_day(api):
+    """All three fixture-seeded trades close on 2026-07-10: +10 -4 +2 = 8."""
+    response = await api.get("/accounts/default/journal/analytics/daily")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    day = body[0]
+    assert day["date"] == "2026-07-10"
+    assert day["pnl"] == 8.0
+    assert day["trade_count"] == 3
+    assert day["win_count"] == 2
+    assert day["loss_count"] == 1
+
+
+async def test_daily_pnl_empty_when_no_trades(tmp_path):
+    engine = create_engine(f"sqlite:///{tmp_path}/empty_daily.db")
+    Base.metadata.create_all(engine)
+    empty_repo = JournalRepository(sessionmaker(bind=engine, expire_on_commit=False))
+
+    from src.journal.application.trade_journal import TradeJournalService
+
+    empty_journal = TradeJournalService(
+        repository=empty_repo, market_context=FakeMarketContext(), event_bus=EventBus()
+    )
+    app = FastAPI()
+    app.include_router(router)
+    app.state.container = SimpleNamespace(
+        accounts={"default": SimpleNamespace(trade_journal=empty_journal)}
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://backend") as client:
+        response = await client.get("/accounts/default/journal/analytics/daily")
+
+    assert response.json() == []
