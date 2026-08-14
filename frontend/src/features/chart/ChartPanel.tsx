@@ -3450,6 +3450,17 @@ export function ChartPanel({
             selectedSignalIndex={selectedSignalIndex}
             onSelectSignal={handleToggleSignal}
             replayCursorTime={backtestReportId ? replayCursorTime : null}
+            // The replay cursor bar's own close — lets the Active orders
+            // list mark-to-market each still-open trade the same way a live
+            // broker position's `profit` updates, instead of an "OPEN"
+            // placeholder frozen until the trade's real close is revealed.
+            currentPrice={
+              backtestReportId && replayActive
+                ? ((candlesRef.current[replayCursorIndex]?.close as
+                    | number
+                    | undefined) ?? null)
+                : null
+            }
             replay={botReplayControls}
           />
         )}

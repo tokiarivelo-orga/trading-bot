@@ -8,7 +8,8 @@
  * Rendered on the right side of the chart inside ChartPanel.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Clock, Search, MapPin, HelpCircle } from "lucide-react";
 import { SIGNAL_OUTCOME_META } from "@/features/backtest/signalOutcome";
 import { TradeDecisionModal } from "@/shared/ui/TradeDecisionModal";
@@ -70,6 +71,7 @@ export function SignalsDock({
   selectedSignalIndex = null,
   onSelectSignal,
   replayCursorTime = null,
+  currentPrice = null,
   replay,
 }: {
   signals: BacktestSignal[];
@@ -106,6 +108,11 @@ export function SignalsDock({
    * Active Orders panel, and hides trades not yet opened — the same
    * "no lookahead" contract the chart's own markers already enforce. */
   replayCursorTime?: number | null;
+  /** The replay cursor bar's own close price — null outside replay. Lets
+   * each "Active orders" card mark an open trade to market the same way a
+   * live broker position's `profit` field does, instead of a static "OPEN"
+   * placeholder that never moves until the trade's real close is revealed. */
+  currentPrice?: number | null;
   /** Session-replay wiring for the bot currently under the eye — undefined
    * hides the Replay tab entirely (saved-backtest views, which have the
    * chart toolbar's own replay controls instead). See `BotReplayControls`. */
@@ -289,38 +296,45 @@ export function SignalsDock({
       </div>
       )}
 
-      {/* List Container */}
-      <div className="flex-1 overflow-y-auto min-h-0 divide-y divide-line">
+      {/* List Container — each tab's active list owns its own dedicated
+          scroll region (rather than sharing one ambient scrollable
+          ancestor) because the virtualized Signals/History lists below need
+          `getScrollElement` to point at their own real scrolling element. */}
+      <div className="flex-1 min-h-0 flex flex-col">
         {activeTab === "replay" ? (
           replay ? (
-            <BotSessionReplayTab
-              signals={signals}
-              trades={trades}
-              replay={replay}
-            />
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              <BotSessionReplayTab
+                signals={signals}
+                trades={trades}
+                replay={replay}
+              />
+            </div>
           ) : null
         ) : activeTab === "indicators" ? (
-          !indicators || indicators.length === 0 ? (
-            <p className="px-3 py-4 text-xs text-ink-muted text-center">
-              No indicators recorded for this bot&apos;s strategy spec.
-            </p>
-          ) : (
-            <ul className="divide-y divide-line">
-              {indicators.map((ind, idx) => (
-                <li key={`${ind.type}-${ind.source}-${idx}`} className="p-2.5 flex flex-col gap-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-bold uppercase px-1 rounded bg-accent/10 text-accent border border-accent/20">
-                      {ind.type}
-                    </span>
-                    <span className="text-xs font-medium text-ink truncate">{ind.label}</span>
-                  </div>
-                  <div className="text-[10px] text-ink-muted">
-                    period {ind.period} · source {ind.source}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {!indicators || indicators.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-ink-muted text-center">
+                No indicators recorded for this bot&apos;s strategy spec.
+              </p>
+            ) : (
+              <ul className="divide-y divide-line">
+                {indicators.map((ind, idx) => (
+                  <li key={`${ind.type}-${ind.source}-${idx}`} className="p-2.5 flex flex-col gap-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold uppercase px-1 rounded bg-accent/10 text-accent border border-accent/20">
+                        {ind.type}
+                      </span>
+                      <span className="text-xs font-medium text-ink truncate">{ind.label}</span>
+                    </div>
+                    <div className="text-[10px] text-ink-muted">
+                      period {ind.period} · source {ind.source}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         ) : activeTab === "signals" ? (
           filteredSignals.length === 0 ? (
             <p className="px-3 py-4 text-xs text-ink-muted text-center">
@@ -329,57 +343,11 @@ export function SignalsDock({
                 : "No matching signals found."}
             </p>
           ) : (
-            <ul className="divide-y divide-line">
-              {filteredSignals.map((s) => {
-                // Anything that didn't become a trade and wasn't merely
-                // unresolved (`skipped`) was actively vetoed/rejected —
-                // matches BotSelector's "Rej" chip count logic.
-                const isRejected = s.outcome !== "opened" && s.outcome !== "skipped";
-                return (
-                  <li key={`${s.time}-${s.originalIndex}`}>
-                    <button
-                      type="button"
-                      onClick={() => onSelectSignal?.(s.originalIndex)}
-                      title="Highlight this signal on the chart"
-                      className={`w-full text-left p-2.5 hover:bg-accent/5 transition-colors flex flex-col gap-1 cursor-pointer ${
-                        selectedSignalIndex === s.originalIndex ? "bg-accent/10 border-l-2 border-accent" : ""
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5 text-[10px] text-ink-muted">
-                        <Clock size={10} />
-                        <span>{formatTime(s.time)}</span>
-                        <span
-                          className={`ml-auto font-mono text-[9px] uppercase tracking-wider px-1 rounded border ${
-                            isRejected
-                              ? "bg-err/10 text-err border-err/30"
-                              : "bg-panel-dark/50 border-line"
-                          }`}
-                        >
-                          {SIGNAL_OUTCOME_META[s.outcome]?.label || s.outcome}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className={`text-[10px] font-bold px-1 rounded ${
-                          s.direction === "buy"
-                            ? "bg-ok/10 text-ok border border-ok/20"
-                            : "bg-err/10 text-err border border-err/20"
-                        }`}>
-                          {s.direction.toUpperCase()}
-                        </span>
-                        <span
-                          className={`text-xs font-medium text-ink flex-1 min-w-0 ${
-                            isRejected ? "whitespace-pre-wrap break-words" : "truncate"
-                          }`}
-                          title={s.reason}
-                        >
-                          {s.reason}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+            <VirtualSignalList
+              signals={filteredSignals}
+              selectedSignalIndex={selectedSignalIndex}
+              onSelectSignal={onSelectSignal}
+            />
           )
         ) : filteredTrades.length === 0 ? (
           <p className="px-3 py-4 text-xs text-ink-muted text-center">
@@ -388,60 +356,61 @@ export function SignalsDock({
               : "No matching trades found."}
           </p>
         ) : replayCursorTime === null ? (
-          <ul className="divide-y divide-line">
-            {historyTrades.map((t) => (
-              <TradeCard
-                key={`${t.open_time}-${t.originalIndex}`}
-                trade={t}
-                isOpen={false}
-                selected={selectedTradeIndex === t.originalIndex}
-                onSelect={() => onSelectTrade?.(t.originalIndex)}
-                onNavigate={(time) => onNavigateTrade?.(t.originalIndex, time)}
-                onWhy={() => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
-              />
-            ))}
-          </ul>
+          <VirtualTradeList
+            trades={historyTrades}
+            selectedTradeIndex={selectedTradeIndex}
+            onSelectTrade={onSelectTrade}
+            onNavigateTrade={onNavigateTrade}
+            onWhy={(t) => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
+          />
         ) : (
           <>
-            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-muted bg-panel-dark/30 sticky top-0">
+            {/* Active orders — realistically never more than a handful of
+                concurrently open positions for one strategy, so this stays
+                a plain unvirtualized list; capped with its own scroll region
+                as a defensive fallback so an unusually large count can't
+                starve the History section below of space. */}
+            <div className="shrink-0 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-muted bg-panel-dark/30">
               Active orders ({activeTrades.length})
             </div>
             {activeTrades.length === 0 ? (
-              <p className="px-3 py-3 text-xs text-ink-muted text-center">Nothing open yet.</p>
+              <p className="shrink-0 px-3 py-3 text-xs text-ink-muted text-center">Nothing open yet.</p>
             ) : (
-              <ul className="divide-y divide-line">
+              <ul className="shrink-0 max-h-48 overflow-y-auto divide-y divide-line">
                 {activeTrades.map((t) => (
-                  <TradeCard
-                    key={`${t.open_time}-${t.originalIndex}`}
-                    trade={t}
-                    isOpen
-                    selected={selectedTradeIndex === t.originalIndex}
-                    onSelect={() => onSelectTrade?.(t.originalIndex)}
-                    onNavigate={(time) => onNavigateTrade?.(t.originalIndex, time)}
-                    onWhy={() => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
-                  />
+                  <li key={`${t.open_time}-${t.originalIndex}`}>
+                    <TradeCard
+                      trade={t}
+                      isOpen
+                      currentPrice={currentPrice}
+                      selected={selectedTradeIndex === t.originalIndex}
+                      onSelect={() => onSelectTrade?.(t.originalIndex)}
+                      onNavigate={(time) => onNavigateTrade?.(t.originalIndex, time)}
+                      onWhy={() => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
+                    />
+                  </li>
                 ))}
               </ul>
             )}
-            <div className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-muted bg-panel-dark/30 sticky top-0">
+            {/* History — grows unbounded as replay progresses, so this is
+                the section that needs virtualization. Its header sits
+                outside (above) the dedicated scroll region as a plain flex
+                sibling rather than a CSS `sticky` element — that pins it
+                just as reliably without fighting the virtualizer's own
+                `getScrollElement` container. */}
+            <div className="shrink-0 px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-muted bg-panel-dark/30 border-t border-line">
               History ({historyTrades.length})
             </div>
             {historyTrades.length === 0 ? (
-              <p className="px-3 py-3 text-xs text-ink-muted text-center">Nothing closed yet.</p>
+              <p className="shrink-0 px-3 py-3 text-xs text-ink-muted text-center">Nothing closed yet.</p>
             ) : (
-              <ul className="divide-y divide-line">
-                {historyTrades.map((t) => (
-                  <TradeCard
-                    key={`${t.open_time}-${t.originalIndex}`}
-                    trade={t}
-                    isOpen={false}
-                    selected={selectedTradeIndex === t.originalIndex}
-                    onSelect={() => onSelectTrade?.(t.originalIndex)}
-                    onNavigate={(time) => onNavigateTrade?.(t.originalIndex, time)}
-                    onWhy={() => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
-                  />
-                ))}
-              </ul>
+              <VirtualTradeList
+                trades={historyTrades}
+                selectedTradeIndex={selectedTradeIndex}
+                onSelectTrade={onSelectTrade}
+                onNavigateTrade={onNavigateTrade}
+                onWhy={(t) => setWhyTrade(toTradeHistoryItem(t, t.originalIndex, backtestMeta))}
+              />
             )}
           </>
         )}
@@ -454,6 +423,7 @@ export function SignalsDock({
 function TradeCard({
   trade: t,
   isOpen,
+  currentPrice = null,
   selected,
   onSelect,
   onNavigate,
@@ -461,28 +431,57 @@ function TradeCard({
 }: {
   trade: BacktestTrade & { originalIndex: number };
   /** True while replaying and this trade hasn't closed as of the cursor yet
-   * — shows an "OPEN" badge instead of the (not yet known) profit. */
+   * — shows a mark-to-market profit (or an "OPEN" badge, lacking a current
+   * price) instead of the trade's final, not-yet-revealed profit. */
   isOpen: boolean;
+  /** The replay cursor bar's close — used to mark an open trade to market.
+   * A backtest trade's profit is exactly linear in price (see
+   * `broker/adapters/paper.py`: `(price - open_price) * direction *
+   * contract_size * volume`, no commission/swap folded in), so the trade's
+   * own known open/close/profit triple gives the per-price-unit rate
+   * directly — no need to duplicate the broker's contract-size/point-value
+   * lookup on the frontend. */
+  currentPrice?: number | null;
   selected: boolean;
   onSelect: () => void;
   onNavigate: (time: number) => void;
   onWhy: () => void;
 }) {
+  // Same linear relationship the backtest engine used to produce `t.profit`
+  // from `t.close_price`, solved backwards for the rate (direction ×
+  // contract size × volume) and reapplied at the cursor's current price.
+  // `priceDelta === 0` only when the trade closed at its own open price
+  // (flat), in which case `t.profit` is already 0 and mark-to-market has
+  // nothing to interpolate.
+  const priceDelta = t.close_price - t.open_price;
+  const liveProfit =
+    isOpen && currentPrice !== null && priceDelta !== 0
+      ? (t.profit / priceDelta) * (currentPrice - t.open_price)
+      : null;
+
   return (
-    <li>
-      <div
-        onClick={onSelect}
-        title="Highlight this trade's entry/SL/TP/close on the chart"
-        className={`p-2.5 hover:bg-accent/5 transition-colors flex flex-col gap-1.5 relative border-l-2 cursor-pointer ${
-          selected ? "bg-accent/10 border-accent" : "border-transparent"
-        }`}
-      >
-        {/* Header info */}
+    <div
+      onClick={onSelect}
+      title="Highlight this trade's entry/SL/TP/close on the chart"
+      className={`p-2.5 hover:bg-accent/5 transition-colors flex flex-col gap-1.5 relative border-l-2 cursor-pointer ${
+        selected ? "bg-accent/10 border-accent" : "border-transparent"
+      }`}
+    >
+      {/* Header info */}
         <div className="flex items-center gap-1.5 text-[10px] text-ink-muted">
           <span className="font-semibold text-ink">Trade #{t.originalIndex + 1}</span>
           <span>•</span>
           <span>{formatTime(t.open_time)}</span>
-          {isOpen ? (
+          {isOpen && liveProfit !== null ? (
+            <span
+              className={`ml-auto inline-flex items-center gap-1 font-mono font-bold ${liveProfit >= 0 ? "text-ok" : "text-err"}`}
+              title="Mark-to-market profit at the replay cursor's price"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />
+              {liveProfit >= 0 ? "+" : ""}
+              {liveProfit.toFixed(2)} USD
+            </span>
+          ) : isOpen ? (
             <span className="ml-auto font-mono font-bold text-accent">OPEN</span>
           ) : (
             <span className={`ml-auto font-mono font-bold ${t.profit >= 0 ? "text-ok" : "text-err"}`}>
@@ -556,8 +555,163 @@ function TradeCard({
             <HelpCircle size={10} /> Why
           </button>
         </div>
+    </div>
+  );
+}
+
+/** Virtualized trade list — backs both the flat (non-replay) Trades tab and
+ * the replay "History" section, which are the same `historyTrades` shape
+ * (closed trades, `isOpen` always false) rendered in two different spots in
+ * the tree. A backtest report can carry thousands of trades; without
+ * windowing, scrubbing deep into replay renders every closed `TradeCard` on
+ * every cursor tick and freezes the tab. `TradeCard`'s rendered height
+ * varies (conditional pattern row, R-multiple chip, Exit button), so this
+ * uses TanStack Virtual's dynamic-size pattern (`measureElement` +
+ * `data-index`) rather than a fixed `estimateSize` that would cause
+ * overlap/gaps. */
+function VirtualTradeList({
+  trades,
+  selectedTradeIndex,
+  onSelectTrade,
+  onNavigateTrade,
+  onWhy,
+}: {
+  trades: (BacktestTrade & { originalIndex: number })[];
+  selectedTradeIndex: number | null;
+  onSelectTrade?: (index: number) => void;
+  onNavigateTrade?: (index: number, time: number) => void;
+  onWhy: (trade: BacktestTrade & { originalIndex: number }) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: trades.length,
+    getScrollElement: () => scrollRef.current,
+    // Rough average TradeCard height; corrected per-row by `measureElement`
+    // below once each row actually mounts and reports its real size.
+    estimateSize: () => 132,
+    overscan: 8,
+    getItemKey: (index) => `${trades[index].open_time}-${trades[index].originalIndex}`,
+  });
+
+  return (
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+      <div
+        className="relative w-full divide-y divide-line"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const t = trades[virtualRow.index];
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              className="absolute top-0 left-0 w-full"
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+            >
+              <TradeCard
+                trade={t}
+                isOpen={false}
+                selected={selectedTradeIndex === t.originalIndex}
+                onSelect={() => onSelectTrade?.(t.originalIndex)}
+                onNavigate={(time) => onNavigateTrade?.(t.originalIndex, time)}
+                onWhy={() => onWhy(t)}
+              />
+            </div>
+          );
+        })}
       </div>
-    </li>
+    </div>
+  );
+}
+
+/** Virtualized signal list backing the Signals tab — same rationale as
+ * `VirtualTradeList` above (a report can carry thousands of signals) and
+ * the same dynamic-size measurement pattern, since a rejected signal's
+ * reason text wraps to a variable number of lines (`whitespace-pre-wrap`)
+ * while an opened one truncates to a single line. */
+function VirtualSignalList({
+  signals,
+  selectedSignalIndex,
+  onSelectSignal,
+}: {
+  signals: (BacktestSignal & { originalIndex: number })[];
+  selectedSignalIndex: number | null;
+  onSelectSignal?: (index: number) => void;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: signals.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 56,
+    overscan: 10,
+    getItemKey: (index) => `${signals[index].time}-${signals[index].originalIndex}`,
+  });
+
+  return (
+    <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto">
+      <div
+        className="relative w-full divide-y divide-line"
+        style={{ height: virtualizer.getTotalSize() }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const s = signals[virtualRow.index];
+          // Anything that didn't become a trade and wasn't merely
+          // unresolved (`skipped`) was actively vetoed/rejected — matches
+          // BotSelector's "Rej" chip count logic.
+          const isRejected = s.outcome !== "opened" && s.outcome !== "skipped";
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              className="absolute top-0 left-0 w-full"
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
+            >
+              <button
+                type="button"
+                onClick={() => onSelectSignal?.(s.originalIndex)}
+                title="Highlight this signal on the chart"
+                className={`w-full text-left p-2.5 hover:bg-accent/5 transition-colors flex flex-col gap-1 cursor-pointer ${
+                  selectedSignalIndex === s.originalIndex ? "bg-accent/10 border-l-2 border-accent" : ""
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-[10px] text-ink-muted">
+                  <Clock size={10} />
+                  <span>{formatTime(s.time)}</span>
+                  <span
+                    className={`ml-auto font-mono text-[9px] uppercase tracking-wider px-1 rounded border ${
+                      isRejected
+                        ? "bg-err/10 text-err border-err/30"
+                        : "bg-panel-dark/50 border-line"
+                    }`}
+                  >
+                    {SIGNAL_OUTCOME_META[s.outcome]?.label || s.outcome}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className={`text-[10px] font-bold px-1 rounded ${
+                    s.direction === "buy"
+                      ? "bg-ok/10 text-ok border border-ok/20"
+                      : "bg-err/10 text-err border border-err/20"
+                  }`}>
+                    {s.direction.toUpperCase()}
+                  </span>
+                  <span
+                    className={`text-xs font-medium text-ink flex-1 min-w-0 ${
+                      isRejected ? "whitespace-pre-wrap break-words" : "truncate"
+                    }`}
+                    title={s.reason}
+                  >
+                    {s.reason}
+                  </span>
+                </div>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
