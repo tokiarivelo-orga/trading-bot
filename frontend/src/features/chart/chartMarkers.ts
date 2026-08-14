@@ -19,6 +19,7 @@ import type {
   BacktestTrade,
   Candle,
   CustomSignal,
+  NewsEventRecord,
   TradeMarker,
 } from '@/shared/api/client';
 import { SIGNAL_OUTCOME_META } from '@/features/backtest/signalOutcome';
@@ -316,6 +317,31 @@ export function buildTradeSetupDrawings(
     );
   }
   return drawings;
+}
+
+/** One marker per persisted calendar event (`GET .../news/events`, Phase 6
+ * Part B / Phase 7) — square markers, colored by impact level, positioned
+ * above the bar so they never collide with the arrowUp/arrowDown/circle
+ * shapes `toSeriesMarkers`/`toBacktestSeriesMarkers` use for trades. Square
+ * is also `toSignalSeriesMarkers`'s shape, but that builder's output is
+ * never combined into the same `setMarkers` array as this one (vetoed
+ * signals are backtest/eyed-bot-only; news markers are wired into the live
+ * view), so there's no on-chart collision despite the shared shape. */
+export function toNewsEventSeriesMarkers(events: NewsEventRecord[]): SeriesMarker<Time>[] {
+  const colorByImpact: Record<string, string> = {
+    high: cssVar('--color-err'),
+    medium: cssVar('--color-sell'),
+    low: cssVar('--color-ink-muted'),
+  };
+  return events
+    .map((e) => ({
+      time: e.time as UTCTimestamp,
+      position: 'aboveBar' as const,
+      color: colorByImpact[e.impact] ?? cssVar('--color-accent'),
+      shape: 'square' as const,
+      text: `${e.impact.toUpperCase()} · ${e.name}`,
+    }))
+    .sort((a, b) => (a.time as number) - (b.time as number));
 }
 
 export function toCustomSignalsSeriesMarkers(

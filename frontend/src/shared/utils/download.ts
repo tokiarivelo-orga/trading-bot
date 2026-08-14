@@ -1,3 +1,34 @@
+import { getToken } from "@/shared/api/client";
+
+/**
+ * Triggers a browser download of a server-generated file, e.g. a bulk CSV
+ * export endpoint that already sets its own `Content-Disposition: attachment`
+ * header (`journal/export/dataset`, `market-data/candles/export`,
+ * `order-book/export`). Unlike `downloadJson`/`downloadCsv`, which build the
+ * blob client-side from data already in memory, this fetches `path` (with
+ * the same bearer-token auth every other `/api` call uses — a plain
+ * `<a href>`/`window.location` download can't attach that header) and
+ * re-blobs the response, since there is no other precedent in this app for
+ * downloading an authenticated server-generated attachment.
+ *
+ * `path` is relative to `/api` (mirrors `shared/api/client.ts`'s `BASE`).
+ * `fallbackFilename` is used only if the response carries no
+ * `Content-Disposition` filename to read.
+ */
+export async function downloadFileFromApi(path: string, fallbackFilename: string): Promise<void> {
+  const token = getToken();
+  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await fetch(`/api${path}`, { headers });
+  if (!res.ok) {
+    throw new Error(`Export failed (${res.status})`);
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+  const filename = match?.[1] ?? fallbackFilename;
+  const blob = await res.blob();
+  downloadBlob(blob, filename);
+}
+
 /**
  * Helper utility to trigger a browser download of JSON data.
  */

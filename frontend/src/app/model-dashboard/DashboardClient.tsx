@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { Search, ChevronDown, Activity, TrendingUp, CheckCircle2, List, BrainCircuit, X, History, Radio } from "lucide-react";
-import { api, getToken } from "@/shared/api/client";
+import { api } from "@/shared/api/client";
+import { downloadFileFromApi } from "@/shared/utils/download";
+import TrainingMetricsPanel from "./TrainingMetricsPanel";
 
 // Helper to generate deterministic pseudo-random numbers based on a string seed
 function pseudoRandom(seed: string) {
@@ -341,19 +343,20 @@ export default function DashboardClient({ symbol, report, parsedSignals, liveSig
                 <button
                   onClick={async () => {
                     try {
-                      const url = `/api/accounts/default/journal/export/dataset?symbol=${encodeURIComponent(symbol || "XAUUSD")}&format=csv`;
-                      const headers: Record<string, string> = {};
-                      const token = getToken();
-                      if (token) headers.Authorization = `Bearer ${token}`;
-                      const res = await fetch(url, { headers });
-                      if (!res.ok) throw new Error("Failed to fetch");
-                      const blob = await res.blob();
-                      const blobUrl = window.URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = blobUrl;
-                      a.download = `dataset_${symbol || "XAUUSD"}.csv`;
-                      a.click();
-                      alert("Dataset exported successfully!");
+                      // `journal/export/dataset` is a server-generated CSV
+                      // attachment (its own Content-Disposition header), not
+                      // data already in memory — downloadFileFromApi fetches
+                      // it with the app's normal bearer-token auth and
+                      // triggers the browser download, instead of hand-rolling
+                      // fetch→blob→anchor here.
+                      const params = new URLSearchParams({
+                        symbol: symbol || "XAUUSD",
+                        format: "csv",
+                      });
+                      await downloadFileFromApi(
+                        `/accounts/default/journal/export/dataset?${params}`,
+                        `dataset_${symbol || "XAUUSD"}.csv`,
+                      );
                     } catch (e) {
                       console.error(e);
                       alert("Export failed.");
@@ -512,6 +515,11 @@ export default function DashboardClient({ symbol, report, parsedSignals, liveSig
           </div>
         )}
       </div>
+
+      {/* Model-training metrics: run history, out-of-sample model verdicts,
+          walk-forward fold detail, and raw-data bulk export triggers — see
+          TrainingMetricsPanel.tsx. */}
+      <TrainingMetricsPanel symbol={symbol || "XAUUSD"} />
     </div>
   );
 }

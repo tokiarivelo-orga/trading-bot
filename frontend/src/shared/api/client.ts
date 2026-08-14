@@ -384,10 +384,31 @@ export interface TradeHistoryItem {
   /** Confluence-check readings behind the bot's entry vote — RSI/ADX/EMA/Volume
    * for the bots that report it. Empty otherwise. */
   indicators: IndicatorReading[];
+  /** Volatility regime at entry — 'low'/'normal'/'high'/'extreme' — from the
+   * ATR-percentile classifier (OBSERVABILITY_PLAN.md Phase 6). Null for trades
+   * journaled before Phase 6, or whose entry timeframe had no candles to classify. */
+  regime_volatility: string | null;
+  /** ATR percentile rank (0-100) behind `regime_volatility`. */
+  regime_volatility_percentile: number | null;
+  /** Trend/range regime at entry — 'trending' or 'ranging' — from the
+   * fixed-threshold ADX classifier. Null under the same conditions as `regime_volatility`. */
+  regime_trend: string | null;
+  /** Raw ADX reading (0-100) behind `regime_trend`. */
+  regime_adx: number | null;
+  /** Trading session at entry — 'asian'/'london'/'overlap'/'new_york'/'off_session'
+   * — bucketed off the UTC hour the signal fired. */
+  regime_session: string | null;
+  /** Spread + slippage cost of this fill, in account currency. Null for trades
+   * journaled before Phase 6. */
+  transaction_cost: number | null;
   mfe: number | null;
   mfe_time: number | null; // epoch seconds UTC
   mae: number | null;
   mae_time: number | null; // epoch seconds UTC
+  /** The signal_id of the SignalDecision that led to this trade, joinable
+   * against /activity/... and the order-book snapshot for the same signal;
+   * null for trades opened before this field existed or via manual/API entry. */
+  signal_id: string | null;
 }
 
 export interface TradeHistoryPage {
@@ -597,6 +618,42 @@ export const getRegimeAnalytics = (
 ) =>
   api.get<RegimeAnalytics[]>(
     acctPath(accountId, `/journal/analytics/regimes${toAnalyticsQs(filters)}`),
+    signal,
+  );
+
+/** One trading day's realized P&L — one entry per calendar date with at
+ * least one trade closed that day, on `GET .../journal/analytics/daily`
+ * (OBSERVABILITY_PLAN.md Phase 7). Read-time aggregation over the same
+ * `trades` table every other analytics endpoint reads, not a persisted
+ * table — the historical counterpart to `engine/application/risk_manager.py`'s
+ * in-memory `_daily_pnl`, which only drives the live daily-loss circuit
+ * breaker. */
+export interface DailyPnl {
+  date: string; // 'YYYY-MM-DD', UTC
+  pnl: number; // sum of realized profit across trades closed this day
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+  breakeven_count: number;
+  win_rate: number; // win_count / trade_count, 0..1
+  gross_profit: number;
+  gross_loss: number; // positive number
+  profit_factor: number | null; // null when no losing trades that day
+  avg_win: number;
+  avg_loss: number; // positive number
+  largest_win: number;
+  largest_loss: number; // negative
+}
+
+/** Daily realized P&L history, sorted oldest first — plots directly as a
+ * daily P&L chart. */
+export const getDailyPnl = (
+  accountId: string,
+  filters?: AnalyticsDateFilters,
+  signal?: AbortSignal,
+) =>
+  api.get<DailyPnl[]>(
+    acctPath(accountId, `/journal/analytics/daily${toAnalyticsQs(filters)}`),
     signal,
   );
 
@@ -1573,6 +1630,50 @@ export const getUpcomingNews = (daysAhead = 7) =>
   api.get<NewsEvent[]>(`/news/upcoming?days_ahead=${daysAhead}`);
 export const getActiveNewsWindows = () => api.get<NewsWindow[]>("/news/active-windows");
 
+/** One persisted calendar event, read from the durable `news_events` table
+ * (Phase 6 Part B) — the historical counterpart to `NewsEvent` above, which
+ * serves the live, in-memory `/news/upcoming` cache (lost on every restart).
+ * Backs `GET /accounts/{id}/news/events` (Phase 7). */
+export interface NewsEventRecord {
+  id: number;
+  name: string;
+  time: number; // epoch seconds UTC
+  impact: ImpactLevel;
+  currency: string;
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+  /** Account balance immediately before this event's news window opened
+   * (Phase 6 Part C). Null when this event never activated a tracked news
+   * window, or the window hasn't opened yet. */
+  balance_before: number | null;
+  /** Account balance immediately after this event's news window closed.
+   * Null when the window hasn't closed yet, or never formally exited. */
+  balance_after: number | null;
+}
+
+/** Persisted calendar-event history in `[start, end]` (epoch seconds UTC,
+ * both inclusive), optionally filtered to one impact level — unlike
+ * `getUpcomingNews` (always the current 7-day-ahead window), this covers any
+ * historical range. `account_id` in the path is only for the backend's
+ * account-existence check: the underlying `news_events` table is NOT
+ * account-scoped (one shared calendar), so every account sees the same rows
+ * — see `news/api/routes.py`'s module docstring. */
+export const getNewsEvents = (
+  accountId: string,
+  opts: { start: number; end: number; impact?: ImpactLevel },
+  signal?: AbortSignal,
+) => {
+  const params = new URLSearchParams();
+  params.set("start", String(opts.start));
+  params.set("end", String(opts.end));
+  if (opts.impact !== undefined) params.set("impact", opts.impact);
+  return api.get<NewsEventRecord[]>(
+    acctPath(accountId, `/news/events?${params.toString()}`),
+    signal,
+  );
+};
+
 // ── Engine: status + kill switch (Phase 9, §11) ─────────────────────────────
 
 export interface EngineStatus {
@@ -1876,3 +1977,96 @@ export const setProviderKey = (provider: string, apiKey: string) =>
 
 export const clearProviderKey = (provider: string) =>
   api.delete<ProviderInfoRaw>(`/ai/settings/providers/${provider}/key`).then(fromRawProviderInfo);
+
+// ── Model training (`model-training` router: routes_training.py) ───────────
+// Process-wide and unprefixed by account — there is one set of model
+// weights on disk shared by every account, so these never take an
+// `accountId` the way most of this file's other calls do.
+
+export interface TrainingRun {
+  id: string;
+  symbol: string;
+  model_name: string;
+  /** One of: running, succeeded, failed. */
+  state: string;
+  started_at: string;
+  finished_at: string | null;
+  exit_code: number | null;
+  error: string | null;
+  log_tail: string[];
+}
+
+/** Walk-forward verdict for a trained model — the numbers that decide
+ * whether it should be switched on. */
+export interface TrainingSummary {
+  folds: number;
+  is_avg_r_mean: number | null;
+  oos_avg_r_mean: number | null;
+  oos_avg_r_min: number | null;
+  oos_pf_mean: number | null;
+  oos_trades_total: number | null;
+  folds_positive_oos: number | null;
+  brier_secure_is_mean: number | null;
+  brier_secure_oos_mean: number | null;
+  /** "NOT TUNABLE" (or similar) when the gate threshold's in-sample and
+   * out-of-sample optima disagree — must not be fitted on in-sample results. */
+  threshold_tunable: string | null;
+}
+
+export interface TrainedModel {
+  model_name: string;
+  symbol: string;
+  trained_at: string | null;
+  n_bars: number;
+  data_start: string | null;
+  data_end: string | null;
+  feature_count: number;
+  weights_bytes: number;
+  summary: TrainingSummary;
+}
+
+/** Realised R of the trades one walk-forward fold's gate would have taken.
+ * Win rate is intentionally absent — see `list_models`'s docstring. */
+export interface FoldEconomics {
+  trades: number;
+  sum_r: number;
+  avg_r: number;
+  profit_factor: number;
+  max_drawdown_r: number;
+}
+
+export interface WalkForwardFold {
+  fold: number;
+  oos_start: string;
+  oos_end: string;
+  temperature: number;
+  brier_secure_is: number;
+  brier_secure_oos: number;
+  revert_acc_oos: number;
+  base_rate_secure_oos: number;
+  economics_is: FoldEconomics;
+  economics_oos: FoldEconomics;
+}
+
+/** `GET /model-training/runs` — up to the last ten finished runs this
+ * process has seen, newest first (in-memory only, cleared on restart). */
+export const getTrainingRuns = () => api.get<TrainingRun[]>("/model-training/runs");
+
+/** `GET /model-training/models` — every `*_meta.json` on disk, newest
+ * first, with its walk-forward summary (in-sample vs out-of-sample R). */
+export const getTrainedModels = () => api.get<TrainedModel[]>("/model-training/models");
+
+/** `GET /model-training/models/{name}/walk-forward` — per-fold detail
+ * behind one model's summary. 404s (via `ApiError`) when no metadata exists
+ * for `modelName` on disk. */
+export const getWalkForward = (modelName: string) =>
+  api.get<WalkForwardFold[]>(`/model-training/models/${encodeURIComponent(modelName)}/walk-forward`);
+
+// ── Bulk data export (AI-training pipelines) ────────────────────────────────
+// `journal/export/dataset`, `market-data/candles/export`, and
+// `order-book/export` all stream a server-generated file (CSV/JSON/parquet)
+// with its own `Content-Disposition` header rather than returning a typed
+// JSON body the app already has in memory — the UI just triggers a download
+// of the URL (see `downloadFileFromApi` in shared/utils/download.ts) instead
+// of fetching+parsing a typed shape for these, so no response interface is
+// declared for them here.

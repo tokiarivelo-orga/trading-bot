@@ -8,14 +8,17 @@ import { BotDrawdownChart } from "./BotDrawdownChart";
 import { BotEquityChart, seriesColor } from "./BotEquityChart";
 import { BotLegend } from "./BotLegend";
 import { BotPerformanceTable } from "./BotPerformanceTable";
+import { DailyPnlPanel } from "./DailyPnlPanel";
 import { RegimeAnalyticsPanel } from "./RegimeAnalyticsPanel";
 import { SignalFunnelPanel } from "./SignalFunnelPanel";
 import { SymbolAnalyticsTable } from "./SymbolAnalyticsTable";
 import { TradePnLHistogram } from "./TradePnLHistogram";
 import { useAnalytics } from "./useAnalytics";
+import { useDailyPnl } from "./useDailyPnl";
 import { useRegimeAnalytics } from "./useRegimeAnalytics";
 import { useSignalFunnel } from "./useSignalFunnel";
 import { useAnalyticsExport } from "./useAnalyticsExport";
+import { downloadCsv, downloadJson } from "@/shared/utils/download";
 
 const MAX_CHARTED_BOTS = 6;
 const DEFAULT_CHARTED_BOTS = 3;
@@ -109,6 +112,14 @@ export function AnalyticsPage() {
     loading: regimeLoading,
     error: regimeError,
   } = useRegimeAnalytics(apiFilters.open_from, apiFilters.open_to);
+  // Same window again, at daily granularity rather than per-bot (Phase 7) —
+  // realized P&L grouped by calendar date, tagged with whether a HIGH-impact
+  // news event fell on that day.
+  const {
+    rows: dailyPnlRows,
+    loading: dailyPnlLoading,
+    error: dailyPnlError,
+  } = useDailyPnl(apiFilters.open_from, apiFilters.open_to);
   const [selected, setSelected] = useState<Set<string> | null>(loadChartSelection);
   const [selectedSymbols, setSelectedSymbols] = useState<Set<string>>(() =>
     loadFilterSet(QUERY_KEY_SYMBOLS, LS_KEY_SYMBOLS),
@@ -267,6 +278,19 @@ export function AnalyticsPage() {
 
   const chartedBots = rankedBots.filter((b) => activeSelection.has(b.skill));
 
+  // Trivial synchronous export of the already-loaded daily-P&L rows — unlike
+  // useAnalyticsExport.ts's builder (N paginated /journal/history fetches
+  // per bot), there's nothing async to await here, so no dedicated hook.
+  function exportDailyPnlJson() {
+    downloadJson(dailyPnlRows, `daily_pnl_${new Date().toISOString().slice(0, 10)}.json`);
+  }
+  function exportDailyPnlCsv() {
+    downloadCsv(
+      dailyPnlRows.map((r) => ({ ...r, highImpactEvents: r.highImpactEvents.join("; ") })),
+      `daily_pnl_${new Date().toISOString().slice(0, 10)}.csv`,
+    );
+  }
+
   const {
     exportJson,
     exportCsv,
@@ -395,6 +419,38 @@ export function AnalyticsPage() {
                 atCapacity={chartAtCapacity}
                 maxCharted={MAX_CHARTED_BOTS}
               />
+            </section>
+
+            <section className="rounded-xl border border-line bg-panel/30 shadow-inner overflow-hidden">
+              <header className="flex items-start justify-between gap-3 border-b border-line px-4 py-2.5">
+                <div>
+                  <h2 className="text-sm font-bold text-ink">Daily P&amp;L</h2>
+                  <p className="text-xs text-ink-muted">
+                    Realized profit grouped by calendar day, across every bot and symbol in the
+                    current filter. Days marked with a newspaper icon had a HIGH-impact economic
+                    event release.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={exportDailyPnlJson}
+                    disabled={dailyPnlRows.length === 0}
+                    title="Export daily P&L as JSON"
+                    className="cursor-pointer rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs font-semibold text-ink-muted transition-all duration-200 hover:bg-bg hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Export JSON
+                  </button>
+                  <button
+                    onClick={exportDailyPnlCsv}
+                    disabled={dailyPnlRows.length === 0}
+                    title="Export daily P&L as CSV"
+                    className="cursor-pointer rounded-lg border border-line bg-panel px-2.5 py-1.5 text-xs font-semibold text-ink-muted transition-all duration-200 hover:bg-bg hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Export CSV
+                  </button>
+                </div>
+              </header>
+              <DailyPnlPanel rows={dailyPnlRows} loading={dailyPnlLoading} error={dailyPnlError} />
             </section>
 
             <section className="rounded-xl border border-line bg-panel/30 shadow-inner overflow-hidden">

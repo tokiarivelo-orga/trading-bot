@@ -4,10 +4,7 @@ import {
   type SymbolAnalytics,
   type TradeHistoryItem,
 } from "@/shared/api/client";
-
-// `/journal/history` caps `limit` at 500 (see backend/src/journal/api/routes.py) —
-// page through it so a bot with a long trade history still exports in full.
-const EXPORT_PAGE_SIZE = 500;
+import { EXPORT_PAGE_SIZE } from "@/shared/api/export";
 
 async function fetchAllTradesForSkill(
   accountId: string,
@@ -118,6 +115,13 @@ export function flattenTradesForCsv(bots: AnalyticsExportBot[]): Record<string, 
         zone_time_end: t.zone?.time_end ?? "",
         structure: t.structure.length > 0 ? JSON.stringify(t.structure) : "",
         comment: t.comment,
+        regime_volatility: t.regime_volatility,
+        regime_volatility_percentile: t.regime_volatility_percentile,
+        regime_trend: t.regime_trend,
+        regime_adx: t.regime_adx,
+        regime_session: t.regime_session,
+        transaction_cost: t.transaction_cost,
+        signal_id: t.signal_id,
       });
     }
   }

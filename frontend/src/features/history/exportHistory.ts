@@ -14,10 +14,8 @@
  */
 
 import { getTradeHistory, type TradeHistoryFilters, type TradeHistoryItem } from "@/shared/api/client";
+import { EXPORT_PAGE_SIZE } from "@/shared/api/export";
 import { downloadCsv, downloadJson } from "@/shared/utils/download";
-
-// /journal/history caps `limit` at 500 — page through to export everything.
-const EXPORT_PAGE_SIZE = 500;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -176,10 +174,19 @@ export interface TradeExportRecord {
   indicators_passed_count: number;
   indicators_total_count: number;
   indicators_pass_rate: number | null; // 0..1
+
+  // ── Regime & execution context (OBSERVABILITY_PLAN.md Phase 6) ────────────
+  regime_volatility: string | null;            // 'low'/'normal'/'high'/'extreme'
+  regime_volatility_percentile: number | null; // 0..100, ATR percentile rank
+  regime_trend: string | null;                 // 'trending'/'ranging'
+  regime_adx: number | null;                   // raw ADX reading, 0..100
+  regime_session: string | null;                // 'asian'/'london'/'overlap'/'new_york'/'off_session'
+  transaction_cost: number | null;              // spread + slippage, account currency
+  signal_id: string | null;                     // joinable against /activity/... and order-book snapshots
 }
 
 export interface HistoryExportPayload {
-  schema_version: "1.0";
+  schema_version: "1.1";
   generated_at: string;
   account_id: string;
   filters_applied: Record<string, string | number | undefined>;
@@ -264,6 +271,13 @@ function buildTradeRecord(t: TradeHistoryItem, accountId: string): TradeExportRe
     indicators_passed_count: passed,
     indicators_total_count: total,
     indicators_pass_rate: total > 0 ? Math.round((passed / total) * 1000) / 1000 : null,
+    regime_volatility: t.regime_volatility,
+    regime_volatility_percentile: t.regime_volatility_percentile,
+    regime_trend: t.regime_trend,
+    regime_adx: t.regime_adx,
+    regime_session: t.regime_session,
+    transaction_cost: t.transaction_cost,
+    signal_id: t.signal_id,
   };
 }
 
@@ -312,7 +326,7 @@ export function buildHistoryExportPayload(
   filtersApplied: Record<string, string | number | undefined>,
 ): HistoryExportPayload {
   return {
-    schema_version: "1.0",
+    schema_version: "1.1",
     generated_at: new Date().toISOString(),
     account_id: accountId,
     filters_applied: filtersApplied,
@@ -389,6 +403,15 @@ export function flattenTradeForCsv(t: TradeExportRecord): Record<string, unknown
       t.indicators.length > 0
         ? JSON.stringify(t.indicators.map((i) => ({ name: i.name, value: i.value, threshold: i.threshold, comparison: i.comparison, passed: i.passed })))
         : "",
+
+    // Regime & execution context (OBSERVABILITY_PLAN.md Phase 6)
+    regime_volatility: t.regime_volatility ?? "",
+    regime_volatility_percentile: t.regime_volatility_percentile ?? "",
+    regime_trend: t.regime_trend ?? "",
+    regime_adx: t.regime_adx ?? "",
+    regime_session: t.regime_session ?? "",
+    transaction_cost: t.transaction_cost ?? "",
+    signal_id: t.signal_id ?? "",
   };
 }
 

@@ -79,6 +79,21 @@ export const queryKeys = {
      * other analytics queries. */
     regimes: (accountId: string | null, openFrom?: number, openTo?: number) =>
       ["analytics", "regimes", accountId, openFrom, openTo] as const,
+    /** `GET /accounts/{id}/journal/analytics/daily` — realized P&L grouped
+     * by calendar date (OBSERVABILITY_PLAN.md Phase 7). Keyed on the same
+     * date filters as the other analytics queries. */
+    dailyPnl: (accountId: string | null, openFrom?: number, openTo?: number) =>
+      ["analytics", "dailyPnl", accountId, openFrom, openTo] as const,
+  },
+  news: {
+    /** `GET /accounts/{id}/news/events?start=&end=&impact=` — persisted
+     * calendar-event history (Phase 6 Part B), joined client-side against
+     * `analytics.dailyPnl` to flag high-impact-news days (Phase 7). Not
+     * actually account-scoped server-side (`news_events` has no per-account
+     * rows — see `news/api/routes.py`'s module docstring) but keyed per
+     * account here anyway, matching every other resource's convention. */
+    eventsForRange: (accountId: string | null, start?: number, end?: number) =>
+      ["news", "eventsForRange", accountId, start, end] as const,
   },
   history: {
     /** Root key for all trade-history queries for an account — pass to
@@ -95,6 +110,19 @@ export const queryKeys = {
      * toggle so both stay in sync via the same cache entry. */
     volatilityConfig: (accountId: string | null) =>
       ["engine", "volatilityConfig", accountId] as const,
+  },
+  modelTraining: {
+    /** `GET /model-training/runs` — process-wide, not scoped by account (see
+     * that router's docstring: one set of model weights shared by every
+     * account), so unlike every other resource here this takes no
+     * `accountId` arg. */
+    runs: () => ["modelTraining", "runs"] as const,
+    /** `GET /model-training/models` — every trained model on disk with its
+     * out-of-sample walk-forward summary. Also process-wide. */
+    models: () => ["modelTraining", "models"] as const,
+    /** `GET /model-training/models/{name}/walk-forward` — per-fold detail
+     * for one model, keyed on its name. */
+    walkForward: (modelName: string) => ["modelTraining", "walkForward", modelName] as const,
   },
 } as const;
 
