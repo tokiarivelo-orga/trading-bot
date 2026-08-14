@@ -10,6 +10,8 @@
 
 import {
   type MouseEventParams,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { type IDrawing } from 'lightweight-charts-drawing';
@@ -23,8 +25,10 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  getNewsEvents,
   getTradeMarkers,
   type Candle,
+  type NewsEventRecord,
   type TradeMarker,
   type StrategyVersionSummary,
   evaluateCustomCode,
@@ -87,6 +91,7 @@ import { nearestCandleTime } from './chartData';
 import {
   buildLiveTradeLineDrawings,
   toCustomSignalsSeriesMarkers,
+  toNewsEventSeriesMarkers,
   toSeriesMarkers,
 } from './chartMarkers';
 import { subscribeSharedPoll } from './sharedPoll';
@@ -1107,6 +1112,41 @@ export function ChartPanel({
   // `symbolInfo`/`spreadPoints` are destructured from `chartRenderController`
   // above).
 
+  // News-event markers (Phase 7): persisted calendar-event history
+  // (`GET .../news/events`), fetched once per account/symbol-view change —
+  // the calendar barely changes minute to minute, unlike trade markers'
+  // MARKERS_POLL_MS poll, so no polling here. Held in state and merged into
+  // the live trade-markers effect below rather than calling `setMarkers`
+  // here directly, since the series-markers plugin only accepts one combined
+  // array per `setMarkers` call. Skipped in backtest/eyed-bot view for the
+  // same reason the live trade-markers effect below is — that view's own
+  // marker-application effect lives in useBacktestData.ts and isn't touched
+  // by this phase. Always-on (no toolbar toggle): wiring one in would mean
+  // touching `ChartToolbarProps`/`ChartToolbar.tsx`, out of scope here (see
+  // this file's other news-marker comments).
+  const [newsEventMarkers, setNewsEventMarkers] = useState<SeriesMarker<Time>[]>([]);
+  useEffect(() => {
+    if (backtestReportId || liveBotSkill || !accountId) {
+      setNewsEventMarkers([]);
+      return;
+    }
+    let cancelled = false;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    getNewsEvents(accountId, {
+      start: nowSeconds - 180 * 86400,
+      end: nowSeconds + 30 * 86400,
+    })
+      .then((events: NewsEventRecord[]) => {
+        if (!cancelled) setNewsEventMarkers(toNewsEventSeriesMarkers(events));
+      })
+      .catch(() => {
+        // Calendar unreachable — leave whatever news markers are already drawn.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId, backtestReportId, liveBotSkill]);
+
   // Poll trade markers (F7): entry arrows + exit circles from the journal,
   // plus an entry->exit oblique line (LIVE_TRADE_DRAWING_PREFIX) for each
   // closed trade so a closed position stays visible on the chart instead of
@@ -1138,9 +1178,12 @@ export function ChartPanel({
     };
     if (customCodeResult) {
       seriesMarkersRef.current?.setMarkers(
-        showTradeMarkers
-          ? toCustomSignalsSeriesMarkers(customCodeResult.signals, colors, showTradeLabels)
-          : [],
+        [
+          ...(showTradeMarkers
+            ? toCustomSignalsSeriesMarkers(customCodeResult.signals, colors, showTradeLabels)
+            : []),
+          ...newsEventMarkers,
+        ].sort((a, b) => (a.time as number) - (b.time as number)),
       );
       clearLiveTradeLines();
       return;
@@ -1168,7 +1211,10 @@ export function ChartPanel({
             ? trades.filter((t) => String(t.id) === String(activeHighlightedTicket))
             : trades;
         seriesMarkersRef.current?.setMarkers(
-          showTradeMarkers ? toSeriesMarkers(displayTrades, colors, showTradeLabels) : [],
+          [
+            ...(showTradeMarkers ? toSeriesMarkers(displayTrades, colors, showTradeLabels) : []),
+            ...newsEventMarkers,
+          ].sort((a, b) => (a.time as number) - (b.time as number)),
         );
         setClosedTrades(trades);
         clearLiveTradeLines();
@@ -1200,6 +1246,7 @@ export function ChartPanel({
     showTradeLabels,
     activeHighlightedTicket,
     showTradeMarkers,
+    newsEventMarkers,
   ]);
 
   // A trade-history row can be arbitrarily far in the past (unlike an open
