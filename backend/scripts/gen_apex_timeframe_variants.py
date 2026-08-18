@@ -1,4 +1,4 @@
-"""Generate the M5/M15/H1/D1 siblings of xauusd_snd_apex_trendguard_m1_v1.py.
+"""Generate the M5/M15/H1/D1 siblings of xauusd_snd_apex_trendguard_m1_v5.py.
 
 Run from `backend/`:
 
@@ -9,7 +9,8 @@ Run from `backend/`:
 generated strategy importing anything but math/statistics/numpy/pandas and
 the domain models, so the siblings cannot share code with it — they have to
 be full copies, the same shape the `xauusd_snd_qm_structure_*` family uses.
-Edit the M1 file, re-run this, re-seed.
+Edit the M1 file (bumping its own version, e.g. `_v6.py`), point `SRC` at
+the new file, re-run this, re-seed.
 
 To keep "full copy" from meaning "silently drifted copy", every edit below is
 an exact-string substitution that MUST match exactly once; a shape change in
@@ -17,15 +18,25 @@ the M1 source fails the run instead of emitting a wrong file.
 `tests/unit/strategies/test_xauusd_snd_apex_trendguard_timeframes.py` asserts
 the invariant from the other side, comparing the emitted files' ASTs against
 the M1 one, so a hand-edited sibling is caught by the suite.
+
+Each run writes a brand-new `_v{N}.py` file per timeframe rather than
+overwriting whatever is already on disk — `next_version_path()` looks at the
+existing `xauusd_snd_apex_trendguard_{suffix}_v*.py` files and picks one
+past the highest it finds. An already-written version file is somebody's
+immutable, possibly-still-`ACTIVE`-in-the-DB historical record (see
+`strategies/application/versioning.py`); overwriting it in place would leave
+that DB row's `code_hash` pointing at code that no longer matches what's on
+disk.
 """
 
 from __future__ import annotations
 
 import pathlib
+import re
 import textwrap
 
 GEN = pathlib.Path(__file__).resolve().parent.parent / "src" / "strategies" / "generated"
-SRC = GEN / "xauusd_snd_apex_trendguard_m1_v1.py"
+SRC = GEN / "xauusd_snd_apex_trendguard_m1_v5.py"
 
 # entry, class suffix, zone tf, htf zone tf, trend ladder, confirmation tfs,
 # ema fast/slow, trend_min, max |score|, shock cooldown, vol lookback
@@ -133,12 +144,14 @@ VARIANTS = [
 
 HEADER = '''"""XAUUSD APEX — S&D + Quasimodo + Trend-Guard + Zone-Respect, {entry} entries.
 
-The {entry} sibling of `xauusd_snd_apex_trendguard_m1_v1.py`. The algorithm is
+The {entry} sibling of `xauusd_snd_apex_trendguard_m1_v5.py`. The algorithm is
 that file byte-for-byte apart from the timeframe wiring below; every
 threshold, gate and default still traces to the forensic post-mortem of the
 2026-08-05 XAUUSD session (608 positions, 41.2% win rate, profit factor 0.73,
--$889.58 on the day) documented in full there. Read the M1 file for *why*
-each number is what it is — this docstring only covers what changes.
+-$889.58 on the day) documented in full there, plus the v2-v5 calibration
+passes on top of it (trend fatigue gate included but off by default — see
+`fatigue_max`/`fatigue_fade_min` below). Read the M1 file for *why* each
+number is what it is — this docstring only covers what changes.
 
 Sandbox rules (CLAUDE.md) limit a generated strategy to math / statistics /
 numpy / pandas, so it cannot import the M1 file and share the code; the
@@ -362,6 +375,22 @@ def substitutions(v: dict) -> list[tuple[str, str]]:
     ]
 
 
+_VERSION_RE = re.compile(r"_v(\d+)\.py$")
+
+
+def next_version_path(suffix: str) -> pathlib.Path:
+    """Next free `xauusd_snd_apex_trendguard_{suffix}_v{N}.py` path — one
+    past the highest version already on disk for this timeframe (0 if none
+    exist yet), so a re-run never overwrites a prior version's file."""
+    stem = f"xauusd_snd_apex_trendguard_{suffix.lower()}"
+    existing = [
+        int(match.group(1))
+        for path in GEN.glob(f"{stem}_v*.py")
+        if (match := _VERSION_RE.search(path.name))
+    ]
+    return GEN / f"{stem}_v{max(existing, default=0) + 1}.py"
+
+
 def main() -> None:
     source = SRC.read_text()
     doc_end = source.index('"""', 3) + 3
@@ -377,7 +406,7 @@ def main() -> None:
                 )
             out = out.replace(old, new)
         text = header_for(v) + out
-        target = GEN / f"xauusd_snd_apex_trendguard_{v['suffix'].lower()}_v1.py"
+        target = next_version_path(v["suffix"])
         target.write_text(text)
         print(f"wrote {target} ({len(text.splitlines())} lines)")
 

@@ -14,6 +14,12 @@ class RiskCaps:
     risk_per_trade_pct: float
     daily_loss_limit_pct: float
     max_open_positions: int
+    # Numeric daily trade-count cap (distinct from the manual kill switch
+    # below): once RiskManager._trades_today reaches this, check_pretrade
+    # blocks further entries until the next trading day. None means no
+    # numeric cap is configured (unlimited) — kept optional so existing
+    # callers that don't set it (tests, older configs) are unaffected.
+    max_trades_per_day: int | None = None
     # Manual daily kill switch, not a count: true blocks every new trade for
     # the rest of the trading day; false leaves trade count today unlimited.
     max_trades_per_day_enabled: bool = False

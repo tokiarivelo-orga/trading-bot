@@ -1,16 +1,29 @@
-"""Unit tests for `xauusd_snd_qm_structure_m1_v3.py` (the ACTIVE version) —
-XAUUSD S&D V1/V2 + Quasimodo + market-structure strategy, M1 Scalping preset.
-Zone timeframe is M5, resampled in-strategy from M1 (5 M1 bars per bucket)."""
+"""Unit tests for `xauusd_snd_qm_structure_m1_v5.py` (patched, VALIDATED —
+not yet active) — XAUUSD S&D V1/V2 + Quasimodo + market-structure strategy,
+M1 Scalping preset. Zone timeframe is M5, resampled in-strategy from M1
+(5 M1 bars per bucket).
+
+v5 adds two live-safety gates over the active v4 (see that file's module
+docstring for the 2026-08-17 over-trading incident this fixes): a hard
+`ctx.own_position is not None` guard, and a `fresh_touch` requirement so a
+zone only signals on the entry-TF bar price first enters it."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from src.strategies.domain.models import Direction, MarketContext, StructureLabel, ZoneKind
-from src.strategies.generated.xauusd_snd_qm_structure_m1_v3 import (
+from src.strategies.domain.models import (
+    Direction,
+    MarketContext,
+    PositionSnapshot,
+    StructureLabel,
+    ZoneKind,
+)
+from src.strategies.generated.xauusd_snd_qm_structure_m1_v5 import (
     XauusdSndQmStructureM1,
     _atr,
     _detect_quasimodo_zones,
@@ -18,6 +31,9 @@ from src.strategies.generated.xauusd_snd_qm_structure_m1_v3 import (
     _detect_zones_v1,
     _resample,
 )
+from src.strategies.sandbox import validate_and_load
+
+STRATEGY_PATH = Path("src/strategies/generated/xauusd_snd_qm_structure_m1_v5.py")
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 STEP = timedelta(minutes=1)
@@ -130,12 +146,13 @@ def test_buy_signals_on_rbr_zone_retest() -> None:
     assert "(Zone)" in sig2.reason
     assert "(Runner)" in sig3.reason
 
-    # Documents the RR-floor bug found via backtest (see M5 test module for
-    # full detail): tp1_target_rr=1.2 < XAUUSD's configured min_rr=1.5, so
-    # this "Scalp" leg never clears the spread gate in practice.
+    # v4 raised tp1_target_rr 1.2 -> 1.8 specifically so the "Scalp" leg
+    # clears XAUUSD's configured min_rr=1.5 spread-gate floor (previously
+    # documented here as a known bug against v3 — see the M5 test module's
+    # history for detail). v5 inherits that fix unchanged.
     risk = sig1.sl_points + SPREAD_POINTS * strategy_params()["point_value"]
     required_tp = 1.5 * risk
-    assert sig1.tp_points < required_tp
+    assert sig1.tp_points >= required_tp
 
 
 def strategy_params() -> dict:
@@ -201,3 +218,55 @@ def test_detect_structure_labels_hh_hl_lh_ll() -> None:
     labels = [s["label"] for s in structure]
     valid_labels = (StructureLabel.HH, StructureLabel.HL, StructureLabel.LH, StructureLabel.LL)
     assert all(label in valid_labels for label in labels)
+
+
+def test_no_signal_when_own_position_open() -> None:
+    """`ctx.own_position` set -> evaluate() must return None even though
+    the same candles would otherwise produce a fresh-touch signal (see
+    test_buy_signals_on_rbr_zone_retest). This is the v5 live-safety
+    guard: only one position at a time."""
+    bars = _rbr_fixture()
+    bars.append(_bar(len(bars), 103.5, 103.6, 101.9, 102.0))  # wick back into the band
+    position = PositionSnapshot(
+        direction=Direction.BUY,
+        entry_price=102.0,
+        sl=101.0,
+        tp=103.0,
+        opened_at=START,
+    )
+    ctx = MarketContext(
+        symbol="XAUUSD",
+        candles={"M1": pd.DataFrame(bars)},
+        spread_points=SPREAD_POINTS,
+        own_position=position,
+    )
+    assert _strategy().evaluate(ctx) is None
+
+
+def test_fresh_touch_gate_only_signals_on_first_touch() -> None:
+    """Two consecutive in-zone candles with no exit between them: only the
+    first (the fresh touch) may emit a signal; the second, still-inside
+    candle must return None — the v5 fix for the 2026-08-17 over-trading
+    incident. Routed through `validate_and_load()`, the sandboxed
+    execution path the live engine and registry actually use, per
+    test_smc_dl_m5_step200_v1.py's precedent."""
+    instance, errors = validate_and_load(STRATEGY_PATH.read_text())
+    assert errors == ()
+    assert instance is not None
+
+    bars = _rbr_fixture()
+    bars.append(_bar(len(bars), 103.5, 103.6, 101.9, 102.0))  # first touch
+    first_ctx = MarketContext(
+        symbol="XAUUSD", candles={"M1": pd.DataFrame(bars)}, spread_points=SPREAD_POINTS
+    )
+    first_result = instance.evaluate(first_ctx)
+    assert first_result is not None
+    assert len(first_result) == 3
+
+    # Second consecutive candle, still resting inside the same zone, no
+    # exit in between -> must NOT re-signal.
+    bars.append(_bar(len(bars), 102.0, 102.05, 101.95, 102.0))
+    second_ctx = MarketContext(
+        symbol="XAUUSD", candles={"M1": pd.DataFrame(bars)}, spread_points=SPREAD_POINTS
+    )
+    assert instance.evaluate(second_ctx) is None

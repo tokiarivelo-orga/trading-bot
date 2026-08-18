@@ -26,19 +26,19 @@ import pandas as pd
 import pytest
 
 from src.strategies.domain.models import Direction, MarketContext
-from src.strategies.generated.xauusd_snd_apex_trendguard_d1_v1 import (
+from src.strategies.generated.xauusd_snd_apex_trendguard_d1_v3 import (
     XauusdSndApexTrendguardD1,
 )
-from src.strategies.generated.xauusd_snd_apex_trendguard_h1_v1 import (
+from src.strategies.generated.xauusd_snd_apex_trendguard_h1_v3 import (
     XauusdSndApexTrendguardH1,
 )
-from src.strategies.generated.xauusd_snd_apex_trendguard_m1_v1 import (
+from src.strategies.generated.xauusd_snd_apex_trendguard_m1_v5 import (
     XauusdSndApexTrendguardM1,
 )
-from src.strategies.generated.xauusd_snd_apex_trendguard_m5_v1 import (
+from src.strategies.generated.xauusd_snd_apex_trendguard_m5_v3 import (
     XauusdSndApexTrendguardM5,
 )
-from src.strategies.generated.xauusd_snd_apex_trendguard_m15_v1 import (
+from src.strategies.generated.xauusd_snd_apex_trendguard_m15_v3 import (
     XauusdSndApexTrendguardM15,
 )
 from src.strategies.sandbox import validate_and_load
@@ -63,9 +63,17 @@ FAMILY = [
 ]
 SIBLINGS = FAMILY[1:]
 
+# The M1 flagship is versioned through the normal versioning API (currently
+# at v5, the calibrated post-mortem build); the siblings are versioned by
+# `gen_apex_timeframe_variants.py` re-running against it (currently v3, the
+# first regeneration off v5 rather than the stale v1).
+_FILE_VERSION = {"m1": 5, "m5": 3, "m15": 3, "h1": 3, "d1": 3}
+
 
 def _source(stem: str) -> str:
-    return (GENERATED / f"xauusd_snd_apex_trendguard_{stem}_v1.py").read_text()
+    return (
+        GENERATED / f"xauusd_snd_apex_trendguard_{stem}_v{_FILE_VERSION[stem]}.py"
+    ).read_text()
 
 
 def _trending(n: int, start: float, drift: float, step: timedelta) -> pd.DataFrame:

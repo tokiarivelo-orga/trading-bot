@@ -1,0 +1,701 @@
+"""XAUUSD S&D + Quasimodo + Market Structure — M5 Scalping preset.
+
+Same core logic as the M1 preset (see xauusd_snd_qm_structure_m1_v1.py
+module docstring) but tuned for M5 entry candles with M15 zone detection.
+
+Trades XAUUSD using three zone-detection methods and market structure:
+  1. Supply & Demand V1 (classic leg-base-leg: RBR/DBD/RBD/DBR)
+  2. Supply & Demand V2 (engulfing-base departure)
+  3. Quasimodo patterns (failure swing → zone)
+
+M5 Scalping: entries on 5-minute candles, zones detected on M15,
+wider parameters for slightly larger moves while remaining intraday.
+
+v1 — initial implementation from the xauusd_trading_bot_prompt spec.
+v4 — tp1_target_rr raised 1.2 -> 1.8: the Scalp leg was mathematically
+  guaranteed to fail XAUUSD's min_rr=1.5 spread-gate floor and never
+  filled in production (verified via backtest activity logs, 2026-08).
+v2 — evaluate() gained two live-safety gates: (1) a hard `ctx.own_position
+  is not None` guard so the bot never opens a second position while one is
+  already open, and (2) the zone-touch tracker now returns a `fresh_touch`
+  flag and entries require it — previously any candle where price still sat
+  inside an already-touched zone re-fired a full 3-leg signal. Root cause of
+  the 2026-08-17 over-trading incident (24 positions opened from 4
+  consecutive M1 candles at one lingering zone). New version only — the
+  prior active version is untouched pending backtest comparison and sign-
+  off.
+"""
+
+import math
+
+import numpy as np
+import pandas as pd
+
+from src.strategies.domain.models import (
+    Direction,
+    MarketContext,
+    PriceZone,
+    Signal,
+    StrategySpec,
+    StructureLabel,
+    StructurePoint,
+    ZoneKind,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# ATR helpers
+# ─────────────────────────────────────────────────────────────────────
+
+def _true_range(df: pd.DataFrame) -> pd.Series:
+    prev_close = df["close"].shift(1)
+    return pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+
+def _atr(df: pd.DataFrame, period: int) -> pd.Series:
+    return _true_range(df).rolling(period, min_periods=period).mean()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Resampling
+# ─────────────────────────────────────────────────────────────────────
+
+def _resample(df: pd.DataFrame, tf_minutes: int, entry_tf_minutes: int) -> tuple:
+    if "time" not in df.columns:
+        return None
+    t_ns = pd.DatetimeIndex(df["time"]).as_unit("ns").asi8
+    step = np.int64(tf_minutes) * 60 * 1_000_000_000
+    entry_ns = np.int64(entry_tf_minutes) * 60 * 1_000_000_000
+    bucket = t_ns // step
+    starts = np.flatnonzero(np.concatenate(([True], bucket[1:] != bucket[:-1])))
+    if len(starts) < 2:
+        return None
+    opens = df["open"].to_numpy()
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+    ends = np.concatenate((starts[1:], [len(t_ns)])) - 1
+    frame = pd.DataFrame(
+        {
+            "time": df["time"].iloc[starts].reset_index(drop=True),
+            "open": opens[starts],
+            "high": np.maximum.reduceat(highs, starts),
+            "low": np.minimum.reduceat(lows, starts),
+            "close": closes[ends],
+        }
+    )
+    end_times = (bucket[starts] + 1) * step
+    if t_ns[ends[-1]] + entry_ns < end_times[-1]:
+        frame = frame.iloc[:-1]
+        end_times = end_times[:-1]
+    if len(frame) < 2:
+        return None
+    return frame, end_times
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Supply & Demand V1
+# ─────────────────────────────────────────────────────────────────────
+
+def _classify_bars(closes, opens, atr_filled, base_mult):
+    body = np.abs(closes - opens)
+    return np.where(body <= base_mult * atr_filled, 0, np.where(closes >= opens, 1, -1))
+
+
+def _build_runs(classes, start=0, stop=None):
+    end_pos = len(classes) if stop is None else stop
+    runs = []
+    for i in range(start, end_pos):
+        cls = int(classes[i])
+        if runs and runs[-1][0] == cls:
+            runs[-1][2] = i
+        else:
+            runs.append([cls, i, i])
+    return runs
+
+
+def _make_is_leg(closes, opens, atr_filled, leg_mult):
+    def is_leg(run):
+        cls, start, end = run
+        return cls != 0 and abs(closes[end] - opens[start]) >= leg_mult * atr_filled[end]
+    return is_leg
+
+
+def _merge_weak_runs(runs, is_leg, max_base):
+    merged = True
+    while merged:
+        merged = False
+        for k in range(len(runs) - 2):
+            d1, pause, d2 = runs[k], runs[k + 1], runs[k + 2]
+            if d1[0] == 0 or pause[0] != 0 or d2[0] != d1[0]:
+                continue
+            if pause[2] - pause[1] + 1 > max_base:
+                continue
+            if is_leg(d1) and is_leg(d2):
+                continue
+            runs[k: k + 3] = [[d1[0], d1[1], d2[2]]]
+            merged = True
+            break
+    return runs
+
+
+def _detect_zones_v1(df, atr_series, params):
+    valid_atr = atr_series.dropna()
+    if valid_atr.empty:
+        return []
+    atr_filled = atr_series.fillna(valid_atr.iloc[0]).to_numpy()
+    opens = df["open"].to_numpy()
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+
+    base_mult = params["base_body_atr_mult"]
+    leg_mult = params["leg_travel_atr_mult"]
+    max_base = int(params["max_base_candles"])
+
+    classes = _classify_bars(closes, opens, atr_filled, base_mult)
+    runs = _build_runs(classes, 0)
+    is_leg = _make_is_leg(closes, opens, atr_filled, leg_mult)
+    runs = _merge_weak_runs([list(r) for r in runs], is_leg, max_base)
+
+    legs = [r for r in runs if is_leg(r)]
+    zones = []
+    for k in range(len(legs) - 1):
+        leg_in, leg_out = legs[k], legs[k + 1]
+        base_start = leg_in[2] + 1
+        base_end = leg_out[1] - 1
+        base_count = base_end - base_start + 1
+        if base_count < 1 or base_count > max_base:
+            continue
+        price_high = float(highs[base_start: base_end + 1].max())
+        price_low = float(lows[base_start: base_end + 1].min())
+        leg_out_up = leg_out[0] == 1
+        conf_idx = None
+        for j in range(leg_out[1], leg_out[2] + 1):
+            cleared = (closes[j] > price_high) if leg_out_up else (closes[j] < price_low)
+            if cleared:
+                conf_idx = j
+                break
+        if conf_idx is None:
+            continue
+        if leg_in[0] == 1:
+            pattern = "RBR" if leg_out_up else "RBD"
+        else:
+            pattern = "DBR" if leg_out_up else "DBD"
+        zones.append({
+            "source": "SND_V1",
+            "pattern": pattern,
+            "kind": ZoneKind.DEMAND if leg_out_up else ZoneKind.SUPPLY,
+            "price_high": price_high,
+            "price_low": price_low,
+            "base_start": base_start,
+            "conf_idx": conf_idx,
+            "leg_out_end": leg_out[2],
+        })
+    return zones
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Supply & Demand V2
+# ─────────────────────────────────────────────────────────────────────
+
+def _detect_zones_v2(df, atr_series, params):
+    valid_atr = atr_series.dropna()
+    if valid_atr.empty:
+        return []
+    atr_filled = atr_series.fillna(valid_atr.iloc[0]).to_numpy()
+    opens = df["open"].to_numpy()
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+    closes = df["close"].to_numpy()
+    n = len(closes)
+
+    base_mult = params["base_body_atr_mult"]
+    max_base = int(params.get("v2_max_base_candles", params["max_base_candles"]))
+    min_engulf_atr = params.get("v2_engulf_min_atr_mult", 1.2)
+
+    zones = []
+    i = 1
+    while i < n - 2:
+        body = abs(closes[i] - opens[i])
+        if body < min_engulf_atr * atr_filled[i]:
+            i += 1
+            continue
+        bullish = closes[i] > opens[i]
+
+        base_start = i + 1
+        base_end = base_start
+        while base_end < n - 1 and (base_end - base_start) < max_base:
+            if abs(closes[base_end] - opens[base_end]) > base_mult * atr_filled[base_end]:
+                break
+            base_end += 1
+
+        base_count = base_end - base_start
+        if base_count < 1:
+            i += 1
+            continue
+
+        dep_idx = base_end
+        if dep_idx >= n:
+            break
+
+        price_high = float(max(highs[i], highs[base_start: base_end].max()))
+        price_low = float(min(lows[i], lows[base_start: base_end].min()))
+
+        if bullish:
+            if closes[dep_idx] > price_high:
+                zones.append({
+                    "source": "SND_V2",
+                    "pattern": "DZ_V2",
+                    "kind": ZoneKind.DEMAND,
+                    "price_high": price_high,
+                    "price_low": price_low,
+                    "base_start": base_start,
+                    "conf_idx": dep_idx,
+                    "leg_out_end": dep_idx,
+                })
+        else:
+            if closes[dep_idx] < price_low:
+                zones.append({
+                    "source": "SND_V2",
+                    "pattern": "SZ_V2",
+                    "kind": ZoneKind.SUPPLY,
+                    "price_high": price_high,
+                    "price_low": price_low,
+                    "base_start": base_start,
+                    "conf_idx": dep_idx,
+                    "leg_out_end": dep_idx,
+                })
+        i = dep_idx + 1
+
+    return zones
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Quasimodo Detection
+# ─────────────────────────────────────────────────────────────────────
+
+def _detect_swing_points(highs, lows, lookback):
+    n = len(highs)
+    swings = []
+    for i in range(lookback, n - lookback):
+        window_highs = highs[i - lookback: i + lookback + 1]
+        if highs[i] == window_highs.max() and sum(window_highs == highs[i]) == 1:
+            swings.append((i, float(highs[i]), "high"))
+        window_lows = lows[i - lookback: i + lookback + 1]
+        if lows[i] == window_lows.min() and sum(window_lows == lows[i]) == 1:
+            swings.append((i, float(lows[i]), "low"))
+    swings.sort(key=lambda x: x[0])
+    return swings
+
+
+def _detect_quasimodo_zones(df, atr_series, params):
+    valid_atr = atr_series.dropna()
+    if valid_atr.empty:
+        return []
+    atr_filled = atr_series.fillna(valid_atr.iloc[0]).to_numpy()
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
+
+    lookback = int(params.get("qm_swing_lookback", 3))
+    min_swing_atr = params.get("qm_min_swing_atr", 0.5)
+
+    swings = _detect_swing_points(highs, lows, lookback)
+    if len(swings) < 4:
+        return []
+
+    zones = []
+    for idx in range(len(swings) - 3):
+        s1, s2, s3, s4 = swings[idx], swings[idx + 1], swings[idx + 2], swings[idx + 3]
+
+        # Bullish QM
+        if (s1[2] == "low" and s2[2] == "high" and s3[2] == "low" and s4[2] == "high"):
+            if s3[1] < s1[1] and s4[1] < s2[1]:
+                swing_range = abs(s2[1] - s3[1])
+                atr_at = atr_filled[min(s3[0], len(atr_filled) - 1)]
+                if swing_range >= min_swing_atr * atr_at:
+                    zone_idx = s3[0]
+                    ext = max(1, lookback // 2)
+                    start = max(0, zone_idx - ext)
+                    end = min(len(lows), zone_idx + ext + 1)
+                    zone_low = float(lows[start:end].min())
+                    zone_high = float(highs[start:end].max())
+                    max_height = 2.0 * atr_at
+                    if zone_high - zone_low > max_height:
+                        mid = (zone_high + zone_low) / 2
+                        zone_high = mid + max_height / 2
+                        zone_low = mid - max_height / 2
+                    zones.append({
+                        "source": "QUASIMODO",
+                        "pattern": "QM_BULL",
+                        "kind": ZoneKind.DEMAND,
+                        "price_high": zone_high,
+                        "price_low": zone_low,
+                        "base_start": zone_idx,
+                        "conf_idx": s4[0],
+                        "leg_out_end": s4[0],
+                    })
+
+        # Bearish QM
+        if (s1[2] == "high" and s2[2] == "low" and s3[2] == "high" and s4[2] == "low"):
+            if s3[1] > s1[1] and s4[1] > s2[1]:
+                swing_range = abs(s3[1] - s2[1])
+                atr_at = atr_filled[min(s3[0], len(atr_filled) - 1)]
+                if swing_range >= min_swing_atr * atr_at:
+                    zone_idx = s3[0]
+                    ext = max(1, lookback // 2)
+                    start = max(0, zone_idx - ext)
+                    end = min(len(highs), zone_idx + ext + 1)
+                    zone_high = float(highs[start:end].max())
+                    zone_low = float(lows[start:end].min())
+                    max_height = 2.0 * atr_at
+                    if zone_high - zone_low > max_height:
+                        mid = (zone_high + zone_low) / 2
+                        zone_high = mid + max_height / 2
+                        zone_low = mid - max_height / 2
+                    zones.append({
+                        "source": "QUASIMODO",
+                        "pattern": "QM_BEAR",
+                        "kind": ZoneKind.SUPPLY,
+                        "price_high": zone_high,
+                        "price_low": zone_low,
+                        "base_start": zone_idx,
+                        "conf_idx": s4[0],
+                        "leg_out_end": s4[0],
+                    })
+
+    return zones
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Market Structure Detection
+# ─────────────────────────────────────────────────────────────────────
+
+def _detect_structure(highs, lows, lookback):
+    swings = _detect_swing_points(highs, lows, lookback)
+    if len(swings) < 2:
+        return []
+    structure = []
+    last_high = None
+    last_low = None
+    for idx, price, typ in swings:
+        if typ == "high":
+            if last_high is not None:
+                label = StructureLabel.HH if price > last_high[1] else StructureLabel.LH
+            else:
+                label = StructureLabel.HH
+            structure.append({"index": idx, "price": price, "label": label})
+            last_high = (idx, price)
+        else:
+            if last_low is not None:
+                label = StructureLabel.LL if price < last_low[1] else StructureLabel.HL
+            else:
+                label = StructureLabel.HL
+            structure.append({"index": idx, "price": price, "label": label})
+            last_low = (idx, price)
+    return structure
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Zone tracking
+# ─────────────────────────────────────────────────────────────────────
+
+def _track_zone_on_entry_tf(zone, zone_end_ns, entry_t_ns, entry_highs,
+                            entry_lows, entry_closes):
+    """Returns (is_broken, is_price_in_zone_now, is_fresh_touch).
+    `is_fresh_touch` is True only on the entry-TF bar price *enters* the
+    zone, not on every bar it still sits inside — a retest is an event,
+    not a state. Without this gate the strategy re-signalled on every
+    candle price lingered in a still-valid zone; see the 2026-08-17 over-trading incident."""
+    start = int(np.searchsorted(entry_t_ns, zone_end_ns, side="left"))
+    if start >= len(entry_t_ns):
+        return False, False, False
+    demand = zone["kind"] == ZoneKind.DEMAND
+    if demand:
+        broke = entry_closes[start:] < zone["price_low"]
+    else:
+        broke = entry_closes[start:] > zone["price_high"]
+    is_broken = bool(np.any(broke))
+    last_idx = len(entry_closes) - 1
+    if demand:
+        in_zone = entry_lows[last_idx] <= zone["price_high"]
+    else:
+        in_zone = entry_highs[last_idx] >= zone["price_low"]
+    prev_idx = last_idx - 1
+    if prev_idx < start:
+        was_in_zone = False
+    elif demand:
+        was_in_zone = entry_lows[prev_idx] <= zone["price_high"]
+    else:
+        was_in_zone = entry_highs[prev_idx] >= zone["price_low"]
+    is_fresh_touch = bool(in_zone and not was_in_zone)
+    return is_broken, in_zone, is_fresh_touch
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Main strategy class — M5 Scalping Preset
+# ─────────────────────────────────────────────────────────────────────
+
+class XauusdSndQmStructureM5:
+    def __init__(self) -> None:
+        self.spec = StrategySpec(
+            name="xauusd_snd_qm_structure_fixed_m5",
+            version=1,
+            symbols=("XAUUSD",),
+            entry_timeframe="M5",
+            confirmation_timeframes=(),
+            htf_veto=False,
+            close_on_opposite_signal=True,
+            params={
+                # ── Zone timeframe ──
+                "zone_tf_minutes": 15,
+                "entry_tf_minutes": 5,
+
+                # ── Zone detection ──
+                "atr_period": 14,
+                "base_body_atr_mult": 0.5,
+                "leg_travel_atr_mult": 0.8,
+                "max_base_candles": 6,
+
+                # ── S&D V2 ──
+                "v2_max_base_candles": 5,
+                "v2_engulf_min_atr_mult": 1.2,
+
+                # ── Quasimodo ──
+                "qm_swing_lookback": 4,
+                "qm_min_swing_atr": 0.6,
+
+                # ── Market structure ──
+                "structure_swing_lookback": 4,
+
+                # ── Take Profit ──
+                "tp_buffer_points": 20,
+                "point_value": 0.01,
+
+                # ── Optimized SL & Tiered Multi-TP parameters ──
+                "sl_zone_buffer_atr_mult": 0.15,  # Stop-hunt & spread survival buffer
+                "sl_zone_buffer_zone_frac": 0.10,  # Additional zone headroom fraction
+                "sl_min_atr_mult": 0.5,           # Minimum ATR stop loss floor
+                "tp1_target_rr": 1.8,             # Quick scalp target — raised from 1.2 in v3:
+                # that value sat below XAUUSD's configured min_rr=1.5, so SpreadGate
+                # silently rejected every single Scalp-tier order (confirmed via 2026-08
+                # backtest activity logs: 100% veto rate across all 4 timeframe presets).
+                # 1.8 clears the floor with headroom even after spread/zone-target clipping.
+                "tp2_target_rr": 2.5,             # Primary zone target fallback
+                "tp3_target_rr": 4.0,             # Structural runner target fallback
+                "tp_buffer_atr_mult": 0.3,        # Dynamic ATR front-run distance before liquidity rejection
+
+                # ── Break Even ──
+                "be_buffer_points": 10,
+
+                # ── Position management ──
+                "one_trade_at_a_time": True,
+            },
+        )
+
+    def evaluate(self, ctx: MarketContext) -> tuple[Signal, ...] | None:
+        params = self.spec.params
+        entry_tf = self.spec.entry_timeframe
+        df = ctx.candles.get(entry_tf)
+
+        if df is None or len(df) < 60:
+            return None
+        if "time" not in df.columns:
+            return None
+        if ctx.own_position is not None:
+            # Only one position at a time. Without this guard, evaluate()
+            # re-fires a fresh 3-leg signal on every candle close where
+            # price still sits inside an already-traded zone — see
+            # the 2026-08-17 over-trading incident for what that costs live.
+            return None
+
+        zone_tf = int(params["zone_tf_minutes"])
+        entry_tf_min = int(params["entry_tf_minutes"])
+        atr_period = int(params["atr_period"])
+
+        resampled = _resample(df, zone_tf, entry_tf_min)
+        if resampled is None:
+            return None
+        zone_frame, zone_end_ns = resampled
+
+        if len(zone_frame) < atr_period + 6:
+            return None
+
+        atr_series = _atr(zone_frame, atr_period)
+        atr_val = atr_series.iloc[-1]
+        if pd.isna(atr_val) or atr_val <= 0:
+            return None
+        atr_val = float(atr_val)
+
+        zones_v1 = _detect_zones_v1(zone_frame, atr_series, params)
+        zones_v2 = _detect_zones_v2(zone_frame, atr_series, params)
+        zones_qm = _detect_quasimodo_zones(zone_frame, atr_series, params)
+
+        all_zones = zones_v1 + zones_v2 + zones_qm
+        if not all_zones:
+            return None
+
+        entry_t_ns = pd.DatetimeIndex(df["time"]).as_unit("ns").asi8
+        entry_highs = df["high"].to_numpy()
+        entry_lows = df["low"].to_numpy()
+        entry_closes = df["close"].to_numpy()
+
+        last_i = len(df) - 1
+        close = float(df["close"].iloc[last_i])
+        t = df["time"].iloc[last_i]
+
+        live_zones = []
+        candidate = None
+        for z in all_zones:
+            leg_out_end = z["leg_out_end"]
+            if leg_out_end >= len(zone_end_ns):
+                continue
+            z_end_ns = zone_end_ns[leg_out_end]
+            is_broken, is_in_zone, is_fresh_touch = _track_zone_on_entry_tf(
+                z, z_end_ns, entry_t_ns, entry_highs, entry_lows, entry_closes
+            )
+            if is_broken:
+                continue
+            live_zones.append(z)
+            # Gated on fresh_touch (not just is_in_zone) so a zone price
+            # still resting inside doesn't re-fire every candle.
+            if is_in_zone and is_fresh_touch and candidate is None:
+                candidate = z
+
+        if candidate is None:
+            return None
+
+        demand = candidate["kind"] == ZoneKind.DEMAND
+        direction = Direction.BUY if demand else Direction.SELL
+
+        # ── Optimized Stop Loss calculation (anchored to execution price + dynamic buffer + ATR floor) ──
+        zone_height = candidate["price_high"] - candidate["price_low"]
+        if zone_height <= 0:
+            return None
+
+        atr_val = float(atr_series.dropna().iloc[-1]) if not atr_series.dropna().empty else 1.0
+        buffer = max(
+            atr_val * float(params.get("sl_zone_buffer_atr_mult", 0.15)),
+            zone_height * float(params.get("sl_zone_buffer_zone_frac", 0.10)),
+        )
+
+        if demand:
+            sl_points = (close - candidate["price_low"]) + buffer
+        else:
+            sl_points = (candidate["price_high"] - close) + buffer
+
+        # Enforce minimum ATR floor so normal Gold volatility doesn't stop out narrow bases
+        sl_points = max(sl_points, atr_val * float(params.get("sl_min_atr_mult", 0.5)))
+        if sl_points <= 0:
+            return None
+
+        # Calculate true risk including spread
+        spread_price = float(ctx.spread_points) * float(params.get("point_value", 0.01))
+        risk_price = sl_points + spread_price
+
+        # ── Tiered Take Profit calculation for 3 target positions (TP1, TP2, TP3) ──
+        tp_buffer = max(
+            float(params.get("tp_buffer_points", 20)) * float(params.get("point_value", 0.01)),
+            atr_val * float(params.get("tp_buffer_atr_mult", 0.3)),
+        )
+        opposite_zones = [z for z in live_zones if z["kind"] != candidate["kind"]]
+
+        # 1. Locate primary and secondary liquidity zones
+        zone_target_1 = None
+        zone_target_2 = None
+        if demand:
+            supply_above = sorted([z for z in opposite_zones if z["price_low"] > close], key=lambda z: z["price_low"])
+            if len(supply_above) >= 1:
+                zone_target_1 = supply_above[0]["price_low"] - close - tp_buffer
+            if len(supply_above) >= 2:
+                zone_target_2 = supply_above[1]["price_low"] - close - tp_buffer
+        else:
+            demand_below = sorted([z for z in opposite_zones if z["price_high"] < close], key=lambda z: z["price_high"], reverse=True)
+            if len(demand_below) >= 1:
+                zone_target_1 = close - demand_below[0]["price_high"] - tp_buffer
+            if len(demand_below) >= 2:
+                zone_target_2 = close - demand_below[1]["price_high"] - tp_buffer
+
+        # 2. Determine TP1 (Quick Scalp / Momentum target): short distance to pay spread and trigger breakeven
+        tp1_points = risk_price * float(params.get("tp1_target_rr", 1.2))
+        if zone_target_1 is not None and zone_target_1 > risk_price * 0.8:
+            tp1_points = min(tp1_points, zone_target_1 * 0.5)
+        tp1_points = max(tp1_points, risk_price * 0.8)
+
+        # 3. Determine TP2 (Primary Zone target): target the primary opposite S&D zone
+        if zone_target_1 is not None and zone_target_1 > tp1_points:
+            tp2_points = zone_target_1
+        else:
+            tp2_points = max(tp1_points + risk_price * 1.0, risk_price * float(params.get("tp2_target_rr", 2.5)))
+
+        # 4. Determine TP3 (Structural Runner target): target secondary zone or trend extension
+        if zone_target_2 is not None and zone_target_2 > tp2_points:
+            tp3_points = zone_target_2
+        else:
+            tp3_points = max(tp2_points + risk_price * 1.5, risk_price * float(params.get("tp3_target_rr", 4.0)))
+
+        # ── Market Structure for annotation ──
+        struct_lookback = int(params["structure_swing_lookback"])
+        zone_highs = zone_frame["high"].to_numpy()
+        zone_lows = zone_frame["low"].to_numpy()
+        structure = _detect_structure(zone_highs, zone_lows, struct_lookback)
+        structure_points = tuple(
+            StructurePoint(
+                time=zone_frame["time"].iloc[min(max(int(s["index"]), 0), len(zone_frame) - 1)],
+                price=s["price"],
+                label=s["label"],
+            )
+            for s in structure[-4:]
+        )
+
+        base_idx = min(max(int(candidate.get("base_start", 0)), 0), len(zone_frame) - 1)
+        zone_annotation = PriceZone(
+            kind=candidate["kind"],
+            pattern=candidate.get("pattern"),
+            price_low=candidate["price_low"],
+            price_high=candidate["price_high"],
+            time_start=zone_frame["time"].iloc[base_idx],
+            time_end=t,
+        )
+
+        base_reason = f"{candidate['source']}/{candidate['pattern']} [{candidate['price_low']:.2f},{candidate['price_high']:.2f}] sl={sl_points:.2f}"
+
+        sig_tp1 = Signal(
+            direction=direction,
+            sl_points=float(sl_points),
+            tp_points=float(tp1_points),
+            confidence=0.75,
+            reason=f"{base_reason} tp1={tp1_points:.2f} (Scalp)",
+            zone=zone_annotation,
+            pattern=candidate.get("pattern"),
+            structure=structure_points,
+        )
+        sig_tp2 = Signal(
+            direction=direction,
+            sl_points=float(sl_points),
+            tp_points=float(tp2_points),
+            confidence=0.70,
+            reason=f"{base_reason} tp2={tp2_points:.2f} (Zone)",
+            zone=zone_annotation,
+            pattern=candidate.get("pattern"),
+            structure=structure_points,
+        )
+        sig_tp3 = Signal(
+            direction=direction,
+            sl_points=float(sl_points),
+            tp_points=float(tp3_points),
+            confidence=0.65,
+            reason=f"{base_reason} tp3={tp3_points:.2f} (Runner)",
+            zone=zone_annotation,
+            pattern=candidate.get("pattern"),
+            structure=structure_points,
+        )
+
+        return (sig_tp1, sig_tp2, sig_tp3)

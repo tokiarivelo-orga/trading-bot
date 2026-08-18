@@ -118,7 +118,8 @@ class RiskManager:
         self, open_positions_count: int, now: datetime | None = None
     ) -> RiskDecision:
         """Caps that don't depend on lot sizing: pause state, open-position
-        count, and the manual max_trades_per_day_enabled kill switch."""
+        count, the numeric daily trade-count cap, and the manual
+        max_trades_per_day_enabled kill switch."""
         now = now or datetime.now(self._tz)
         self._roll_day_if_needed(now)
         if self._paused:
@@ -130,6 +131,15 @@ class RiskManager:
                 approved=False,
                 reason=f"max open positions reached ({self._caps.max_open_positions})",
                 code="max_positions",
+            )
+        if (
+            self._caps.max_trades_per_day is not None
+            and self._trades_today >= self._caps.max_trades_per_day
+        ):
+            return RiskDecision(
+                approved=False,
+                reason=f"max trades per day reached ({self._caps.max_trades_per_day})",
+                code="max_trades_per_day",
             )
         if self._caps.max_trades_per_day_enabled:
             return RiskDecision(

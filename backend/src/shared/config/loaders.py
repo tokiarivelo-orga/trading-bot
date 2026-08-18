@@ -56,6 +56,7 @@ def load_risk_caps(configs_dir: Path) -> RiskCaps:
         risk_per_trade_pct=data["risk_per_trade_pct"],
         daily_loss_limit_pct=data["daily_loss_limit_pct"],
         max_open_positions=data["max_open_positions"],
+        max_trades_per_day=data.get("max_trades_per_day"),
         max_trades_per_day_enabled=data.get("max_trades_per_day_enabled", False),
         consecutive_loss_pause=data["consecutive_loss_pause"],
         consecutive_loss_pause_enabled=data.get("consecutive_loss_pause_enabled", True),

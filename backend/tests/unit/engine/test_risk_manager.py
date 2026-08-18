@@ -197,7 +197,7 @@ def test_check_pretrade_allows_when_daily_kill_switch_disabled():
     for _ in range(50):
         manager.record_trade_opened(now)
     decision = manager.check_pretrade(open_positions_count=0, now=now)
-    assert decision.approved  # no count-based cap anymore
+    assert decision.approved  # CAPS.max_trades_per_day is None -> no numeric cap configured
 
 
 def test_check_pretrade_blocks_when_daily_kill_switch_enabled():
@@ -206,6 +206,40 @@ def test_check_pretrade_blocks_when_daily_kill_switch_enabled():
     decision = manager.check_pretrade(open_positions_count=0)
     assert not decision.approved
     assert "max_trades_per_day_enabled" in decision.reason
+
+
+def test_check_pretrade_blocks_at_max_trades_per_day():
+    caps = dataclasses.replace(CAPS, max_trades_per_day=2)
+    manager = make_manager(caps)
+    now = datetime(2026, 7, 11, 10, 0, tzinfo=UTC)
+    manager.record_trade_opened(now)
+    manager.record_trade_opened(now)
+    decision = manager.check_pretrade(open_positions_count=0, now=now)
+    assert not decision.approved
+    assert decision.code == "max_trades_per_day"
+    assert "max trades per day" in decision.reason
+
+
+def test_check_pretrade_allows_below_max_trades_per_day():
+    caps = dataclasses.replace(CAPS, max_trades_per_day=2)
+    manager = make_manager(caps)
+    now = datetime(2026, 7, 11, 10, 0, tzinfo=UTC)
+    manager.record_trade_opened(now)
+    decision = manager.check_pretrade(open_positions_count=0, now=now)
+    assert decision.approved
+
+
+def test_max_trades_per_day_resets_on_new_day():
+    caps = dataclasses.replace(CAPS, max_trades_per_day=1)
+    manager = make_manager(caps)
+    day_one = datetime(2026, 7, 11, 23, 55, tzinfo=UTC)
+    day_two = datetime(2026, 7, 12, 0, 5, tzinfo=UTC)
+    manager.record_trade_opened(day_one)
+    decision = manager.check_pretrade(open_positions_count=0, now=day_one)
+    assert not decision.approved
+    assert decision.code == "max_trades_per_day"
+    decision = manager.check_pretrade(open_positions_count=0, now=day_two)
+    assert decision.approved  # new day rolled the counter back to 0
 
 
 def test_consecutive_losses_trip_circuit_breaker():
