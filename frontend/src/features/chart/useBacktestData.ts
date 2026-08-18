@@ -81,13 +81,8 @@ export interface UseBacktestDataParams {
    * marker layer in place of the report's own trades/signals. */
   customCodeResult: EvaluateCustomCodeResponse | null;
   orderLineStyle: OrderLineStyle;
-  showTradeLabels: boolean;
-  /** Independent of `showTradeLabels` (which only blanks the marker text):
-   * when false, no trade/signal arrow markers are painted at all. */
-  showTradeMarkers: boolean;
-  /** User-configurable zone-rectangle colors (Zone colors settings panel) —
-   * see `pickZoneColor` in chartFormat.ts. */
   zoneColorStyle: ZoneColorStyle;
+  activeHighlightedTicket: string | number | null;
 }
 
 export function useBacktestData({
@@ -100,9 +95,8 @@ export function useBacktestData({
   replayCursorIndex,
   customCodeResult,
   orderLineStyle,
-  showTradeLabels,
-  showTradeMarkers,
   zoneColorStyle,
+  activeHighlightedTicket,
 }: UseBacktestDataParams) {
   const accountId = useActiveAccount();
 
@@ -273,13 +267,11 @@ export function useBacktestData({
       : Infinity;
     if (customCodeResult) {
       chartController.getSeriesMarkersPrimitive()?.setMarkers(
-        showTradeMarkers
-          ? toCustomSignalsSeriesMarkers(
-              customCodeResult.signals,
-              colors,
-              showTradeLabels,
-            ).filter((m) => (m.time as number) <= cursorTime)
-          : [],
+        toCustomSignalsSeriesMarkers(
+          customCodeResult.signals,
+          colors,
+          true,
+        ).filter((m) => (m.time as number) <= cursorTime)
       );
       clearBacktestDrawings();
       lastRevealedSignatureRef.current = null;
@@ -287,15 +279,11 @@ export function useBacktestData({
     }
     chartController.getSeriesMarkersPrimitive()?.setMarkers(
       [
-        ...(showTradeMarkers
-          ? toBacktestSeriesMarkers(backtestTrades, colors, showTradeLabels)
-          : []),
+        ...toBacktestSeriesMarkers(backtestTrades, colors, true),
         // Vetoed/rejected signals as square markers — every valid setup the
         // strategy saw, not only the fills (opened signals ARE the trade
         // arrows above, so they're excluded from this builder).
-        ...(showTradeMarkers
-          ? toSignalSeriesMarkers(backtestSignals ?? [], showTradeLabels)
-          : []),
+        ...toSignalSeriesMarkers(backtestSignals ?? [], true),
       ]
         .sort((a, b) => (a.time as number) - (b.time as number))
         .filter((m) => (m.time as number) <= cursorTime),
@@ -377,8 +365,6 @@ export function useBacktestData({
     replayActive,
     replayCursorIndex,
     orderLineStyle,
-    showTradeLabels,
-    showTradeMarkers,
     zoneColorStyle,
   ]);
 

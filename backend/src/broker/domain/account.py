@@ -46,11 +46,23 @@ class AccountConfig:
     mode: str  # "paper" | "live"
     enabled: bool = True
     risk_override_file: str | None = None
-    # Path to this account's own terminal64.exe, relative to the Wine
-    # prefix's drive_c/ (e.g. "MT5-demo-1/terminal64.exe"). None for the
-    # primary account (attaches to whichever terminal is already running,
-    # unchanged pre-multi-account behavior) — required for any additional
-    # concurrent account, since MetaTrader5 allows one login per terminal.
+    # Absolute, OS-native path to this account's own terminal64.exe — a
+    # plain Windows path on a native Windows install, or an absolute Linux
+    # path for Wine (e.g.
+    # "/home/user/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe").
+    # This is the new primary field going forward: it works for both native
+    # Windows installs (no Wine prefix at all) and Wine setups where the
+    # prefix location varies per machine. None for the primary account
+    # (attaches to whichever terminal is already running, unchanged
+    # pre-multi-account behavior) — required for any additional concurrent
+    # account, since MetaTrader5 allows one login per terminal. Takes
+    # precedence over `mt5_terminal_subpath` when both are set.
+    mt5_terminal_path: str | None = None
+    # Legacy/still-supported form: path to this account's own terminal64.exe,
+    # relative to the Wine prefix's drive_c/ (e.g.
+    # "MT5-demo-1/terminal64.exe"), resolved against whatever Wine prefix the
+    # invoking Makefile/shell has configured. Keeps working unchanged for
+    # existing Linux/Wine setups; prefer `mt5_terminal_path` for new entries.
     mt5_terminal_subpath: str | None = None
 
 

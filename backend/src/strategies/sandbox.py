@@ -26,6 +26,7 @@ import ast
 import builtins
 import math
 import threading
+from pathlib import Path
 
 import pandas as pd
 
@@ -87,8 +88,18 @@ def validate_and_load(source: str) -> tuple[Strategy | None, tuple[str, ...]]:
     if static_errors:
         return None, tuple(static_errors)
 
+    # Inject __file__ so strategies that use Path(__file__) for model path
+    # resolution (e.g. smc_dl_m5_step200_v1) always find backend/data/ml_models
+    # regardless of the server's CWD. We point it at the generated strategies
+    # directory (backend/src/strategies/generated/strategy.py) so that
+    # Path(__file__).resolve().parents[3] == backend/ is always satisfied.
+    # sandbox.py itself lives at backend/src/strategies/sandbox.py — one more
+    # parent up is backend/src/strategies/generated/, the canonical home of
+    # all generated code.
+    _generated_dir = Path(__file__).resolve().parent / "generated" / "_sandbox_placeholder.py"
     module_globals: dict[str, object] = {
         "__name__": "sandboxed_strategy",
+        "__file__": str(_generated_dir),
         "__builtins__": _safe_builtins(),
     }
     try:
@@ -199,6 +210,11 @@ def _safe_builtins() -> dict[str, object]:
         "StopIteration",
         "ZeroDivisionError",
         "ArithmeticError",
+        "NameError",
+        "RuntimeError",
+        "AttributeError",
+        "NotImplementedError",
+        "ImportError",
     ]
     safe = {name: getattr(builtins, name) for name in names if hasattr(builtins, name)}
     safe["__import__"] = _safe_import

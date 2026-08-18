@@ -1,6 +1,7 @@
 import os
-import sys
 import sqlite3
+import sys
+
 import numpy as np
 import pandas as pd
 import torch
@@ -20,7 +21,7 @@ def _load_candles(db_path: str, symbol: str) -> dict[str, pd.DataFrame]:
         query = (
             "SELECT time, open, high, low, close, tick_volume "
             "FROM candles "
-            f"WHERE symbol=? AND timeframe=? "
+            "WHERE symbol=? AND timeframe=? "
             "ORDER BY time"
         )
         df = pd.read_sql_query(query, conn, params=(symbol, tf))
@@ -145,6 +146,16 @@ def optimize_step_index():
     df_res = df_res.sort_values("profit_factor", ascending=False)
     print("Top 10 Ultra-Optimized Configurations for Step Index 200:")
     print(df_res.head(10).to_string(index=False))
+    
+    # Emit machine-parseable line for cron_train_models.sh to auto-patch strategy.
+    # Format: "Best: min_direction_conf 0.70 min_tp_prob 0.60 pf=1.23 wr=0.83"
+    best = df_res.iloc[0]
+    print(
+        f"\nBest: min_direction_conf {best['min_direction_conf']:.2f} "
+        f"min_tp_prob {best['min_tp_prob']:.2f} "
+        f"pf={best['profit_factor']:.3f} wr={best['win_rate']:.3f} n={int(best['total_trades'])}"
+    )
+
 
 if __name__ == "__main__":
     optimize_step_index()

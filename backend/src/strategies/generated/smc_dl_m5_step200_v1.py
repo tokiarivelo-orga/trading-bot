@@ -1,32 +1,76 @@
-"""SMC Deep Learning strategy — M5 entry on XAUUSD.
+"""SMC Deep Learning strategy — M5 Order-Block entry on Step Index 200.
 
-Loads a pre-trained PyTorch multi-task model (trained offline by
-``backend/scripts/train_smc_dl.py``) and runs inference every M5 bar to
-produce a Signal when the model is confident enough.  The model predicts:
+ARCHITECTURE (v2 — OB-first, DL-filter)
+────────────────────────────────────────
+v1 was purely DL-driven: fire when model says bull/bear >= 0.70.
+The problem: the model rarely reaches 0.70 on OB touch bars because the
+3-class softmax spreads probability mass over the neutral class even when
+the structural setup is clean.  OB touches were systematically missed.
 
-- P(TP hit before SL) — "tp_probability"
-- Direction (bearish / neutral / bullish) — "direction"
-- Risk score — "risk"
+v2 flips the pipeline:
 
-Sandbox note: this file imports ``torch`` which must be added to the
-sandbox allowlist.  It does NOT perform I/O beyond loading model weights
-at construction time (``__init__``).
+  1. detect_zones proposes unmitigated demand/supply OBs using the same
+     RBR/DBD base geometry as smc_dl_features_v2.detect_zones (shared
+     code, identical zones between the feature set and the trade logic).
+  2. Fresh-touch guard: signal only on the bar price *enters* the zone
+     for the first time, not on every bar it sits inside.
+  3. Opposing-zone structural veto: never buy into unmitigated supply
+     within 1.5x the stop distance overhead, and vice-versa.
+  4. DL advisory veto: if the model outputs a *strong negative* opinion
+     (it actively disagrees with direction at > model_veto_threshold),
+     the setup is skipped.  A neutral/uncertain model output does NOT block
+     -- structure is the primary edge, not the model.
+  5. SL sits just beyond the zone far edge + ATR noise buffer.
+     TP is target_r x sl.  Confidence from model tp_prob when available.
+
+Why the DL model is advisory-only
+──────────────────────────────────
+The model's directional softmax has a p99 of 0.784 on this instrument
+(post Aug 9 retrain).  Using it as an entry gate with threshold 0.70 fires
+on ~5% of bars and misses every OB touch where the model is merely neutral.
+Using it as a *veto* only -- block if the model is confidently wrong, pass
+otherwise -- means the structural setup does the heavy lifting and the model
+contributes when it has strong negative conviction.
+
+SANDBOX
+────────
+Passes strategies/sandbox.validate_and_load.  Imports only allowlisted
+modules.  Model weights loaded once in __init__; evaluate() has no I/O.
 """
 
-import math
-import numpy as np
-import pandas as pd
-import torch
 from pathlib import Path
 
-from src.strategies.domain.models import Direction, MarketContext, Signal, StrategySpec
-from src.strategies.generated.smc_dl_model import SmcMultiTaskNet
+import numpy as np
+import torch
+
+from src.strategies.domain.models import (
+    Direction,
+    MarketContext,
+    PriceZone,
+    Signal,
+    StrategySpec,
+    ZoneKind,
+)
 from src.strategies.generated.smc_dl_features import compute_smc_features
+from src.strategies.generated.smc_dl_features_v2 import atr as _atr_v2
+from src.strategies.generated.smc_dl_features_v2 import detect_zones
+from src.strategies.generated.smc_dl_model import SmcMultiTaskNet
 
 
-# Resolve model artifacts assuming the process runs with cwd=backend
-_BACKEND_DIR = Path(".").resolve()
-_MODELS_DIR = _BACKEND_DIR / "data" / "ml_models"
+def _resolve_models_dir() -> "Path":
+    try:
+        return Path(__file__).resolve().parents[3] / "data" / "ml_models"
+    except NameError:
+        candidate = Path(".").resolve()
+        for _ in range(6):
+            probe = candidate / "data" / "ml_models"
+            if probe.is_dir():
+                return probe
+            candidate = candidate.parent
+        return Path(".").resolve() / "data" / "ml_models"
+
+
+_MODELS_DIR = _resolve_models_dir()
 
 
 class SmcDlM5Step200:
@@ -38,12 +82,30 @@ class SmcDlM5Step200:
             entry_timeframe="M5",
             confirmation_timeframes=("M15", "H1", "H4"),
             params={
-                "tp_atr_mult": 1.5,
-                "sl_atr_mult": 1.0,
-                "min_tp_prob": 0.60,
-                "min_direction_conf": 0.75,
+                # --- zone geometry ---
+                # Stop sits this many ATR beyond the zone's far edge.
+                "sl_zone_buffer_atr": 0.20,
+                # Reject setup if the resulting SL is wider than this.
+                "max_sl_atr": 3.0,
+                # A zone tested this many times is no longer fresh.
+                "max_zone_touches": 3,
+                # A base needs this many bars of age before the return to it
+                # is a retest rather than the original impulse still unfolding.
+                "min_zone_age_bars": 2,
+                # Hard structural veto: reject a buy with unmitigated supply
+                # within this multiple of the stop distance overhead.
+                "opposing_zone_veto_r": 1.5,
+                # --- reward:risk ---
+                "target_r": 1.5,
+                # --- DL advisory veto ---
+                # Block the OB trade only when the model scores the OPPOSITE
+                # direction at or above this threshold.  Below it the model is
+                # neutral/uncertain and does NOT veto.
+                "model_veto_threshold": 0.65,
+                # --- cost ---
+                "point_value": 0.01,
             },
-            htf_veto=False,  # model does its own MTF analysis
+            htf_veto=False,
         )
 
         model_path = _MODELS_DIR / "smc_dl_m5_step200.pt"
@@ -54,110 +116,202 @@ class SmcDlM5Step200:
         self._scaler_scale: np.ndarray | None = None
 
         if model_path.exists() and scaler_path.exists():
-            scaler_data = np.load(str(scaler_path))
-            self._scaler_mean = scaler_data["mean"]
-            self._scaler_scale = scaler_data["scale"]
-
-            input_dim = len(self._scaler_mean)
-            self._model = SmcMultiTaskNet(input_dim=input_dim, hidden_dim=192)
-            self._model.load_state_dict(
-                torch.load(str(model_path), weights_only=True, map_location="cpu")
-            )
-            self._model.eval()
+            try:
+                scaler_data = np.load(str(scaler_path))
+                self._scaler_mean = scaler_data["mean"]
+                self._scaler_scale = np.clip(scaler_data["scale"], 1e-8, None)
+                input_dim = len(self._scaler_mean)
+                self._model = SmcMultiTaskNet(input_dim=input_dim, hidden_dim=192)
+                self._model.load_state_dict(
+                    torch.load(str(model_path), weights_only=True, map_location="cpu")
+                )
+                self._model.eval()
+            except Exception:
+                self._model = None
 
     # ------------------------------------------------------------------
     def evaluate(self, ctx: MarketContext) -> Signal | None:
-        if self._model is None:
+        # Max 1 open position at a time.
+        if ctx.own_position is not None:
             return None
+
+        df_m5 = ctx.candles.get("M5")
+        if df_m5 is None or len(df_m5) < 60:
+            return None
+
+        atr_series = _atr_v2(df_m5, 14)
+        atr_value = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+        if not (atr_value > 0 and np.isfinite(atr_value)):
+            return None
+
+        params = self.spec.params
+        price = float(df_m5["close"].iloc[-1])
+        spread_price = float(ctx.spread_points) * params["point_value"]
+
+        # ── 1. Detect unmitigated OB zones ──────────────────────────────
+        zones = detect_zones(df_m5, atr_series)
+
+        # ── 2. Find the freshest qualifying zone price just entered ──────
+        candidate = self._select_zone(zones, price, params)
+        if candidate is None:
+            return None
+
+        is_buy = candidate["kind"] == "demand"
+
+        # ── 3. SL anchored to zone far edge + noise buffer ───────────────
+        buffer = atr_value * params["sl_zone_buffer_atr"] + spread_price
+        if is_buy:
+            stop_price = candidate["price_low"] - buffer
+            sl_points = price - stop_price
+        else:
+            stop_price = candidate["price_high"] + buffer
+            sl_points = stop_price - price
+
+        if sl_points <= 0:
+            return None
+
+        # Chasing guard: if price has already run far from the zone,
+        # the stop this produces is the wide one the retest was supposed to avoid.
+        if sl_points > atr_value * params["max_sl_atr"]:
+            return None
+
+        # ── 4. Hard structural veto (opposing zone overhead/below) ────────
+        if self._veto_opposing_zone(zones, is_buy, price, sl_points, params):
+            return None
+
+        tp_points = sl_points * params["target_r"]
+        direction = Direction.BUY if is_buy else Direction.SELL
+
+        zone_note = (
+            candidate["kind"]
+            + " ["
+            + _f(candidate["price_low"])
+            + ","
+            + _f(candidate["price_high"])
+            + "] touch="
+            + str(candidate["touches"])
+            + " age="
+            + str(candidate["age_bars"])
+        )
+
+        # ── 5. DL advisory veto ───────────────────────────────────────────
+        confidence, vetoed, model_note = self._model_opinion(ctx, is_buy, params)
+        if vetoed:
+            return None
+
+        return Signal(
+            direction=direction,
+            sl_points=sl_points,
+            tp_points=tp_points,
+            confidence=confidence,
+            reason=(
+                "OB retest "
+                + zone_note
+                + " sl="
+                + _f(sl_points)
+                + " "
+                + model_note
+            ),
+            zone=PriceZone(
+                kind=ZoneKind.DEMAND if is_buy else ZoneKind.SUPPLY,
+                price_low=candidate["price_low"],
+                price_high=candidate["price_high"],
+                time_start=df_m5.index[0],
+                time_end=df_m5.index[-1],
+                pattern="OB",
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    def _select_zone(self, zones, price, params):
+        """Freshest qualifying zone whose price has just freshly entered, or None."""
+        best = None
+        for zone in zones:
+            # Only fire on the bar price first enters the zone.
+            if not zone["fresh_touch"]:
+                continue
+            if zone["touches"] > params["max_zone_touches"]:
+                continue
+            if zone["age_bars"] < params["min_zone_age_bars"]:
+                continue
+            if zone["price_high"] <= zone["price_low"]:
+                continue
+            # Price already blown through — not a retest.
+            if zone["kind"] == "demand" and price < zone["price_low"]:
+                continue
+            if zone["kind"] == "supply" and price > zone["price_high"]:
+                continue
+            # Take the most recently formed zone.
+            if best is None or zone["index"] > best["index"]:
+                best = zone
+        return best
+
+    def _veto_opposing_zone(self, zones, is_buy, price, sl_points, params):
+        """Block a buy with unmitigated supply directly overhead (and vice-versa)."""
+        reach = sl_points * params["opposing_zone_veto_r"]
+        for zone in zones:
+            if is_buy and zone["kind"] == "supply":
+                distance = zone["price_low"] - price
+                if -sl_points <= distance <= reach:
+                    return True
+            if (not is_buy) and zone["kind"] == "demand":
+                distance = price - zone["price_high"]
+                if -sl_points <= distance <= reach:
+                    return True
+        return False
+
+    def _model_opinion(self, ctx, is_buy, params):
+        """Return (confidence, vetoed, note).
+
+        confidence  -- tp_prob from the model, or 0.55 when unavailable
+        vetoed      -- True only if the model strongly disagrees with direction
+        note        -- human-readable string appended to Signal.reason
+        """
+        if self._model is None:
+            return 0.55, False, "model=unavailable"
 
         try:
-            features_dict = compute_smc_features(ctx.candles, ctx.symbol, lookback=20)
-        except Exception as e:
-            return None
+            features_dict = compute_smc_features(
+                ctx.candles, ctx.symbol, lookback=20
+            )
+        except Exception:
+            return 0.55, False, "model=feature-err"
 
-        if not features_dict:
-            return None
+        if not features_dict or len(features_dict) != len(self._scaler_mean):
+            return 0.55, False, "model=dim-mismatch"
 
-        feature_values = np.array(list(features_dict.values()), dtype=np.float32)
-        if len(feature_values) != len(self._scaler_mean):
-            return None
-
-        x_scaled = (feature_values - self._scaler_mean) / np.clip(
-            self._scaler_scale, 1e-8, None
-        )
+        x = np.array(list(features_dict.values()), dtype=np.float32)
+        x_scaled = (x - self._scaler_mean) / self._scaler_scale
         x_t = torch.FloatTensor(x_scaled).unsqueeze(0)
 
         with torch.no_grad():
             tp_prob, direction_logits, _risk = self._model(x_t)
 
-        tp_p = tp_prob.item()
+        # head_tp already ends in nn.Sigmoid() (smc_dl_model.SmcMultiTaskNet)
+        # so tp_prob is already a 0..1 probability — do not sigmoid it again.
+        tp_p = float(tp_prob.item())
         dir_probs = torch.softmax(direction_logits, dim=1).squeeze().numpy()
+        bear_p = float(dir_probs[0])
+        bull_p = float(dir_probs[2])
 
-        # head_dir is a THREE-class softmax: 0=bearish, 1=neutral, 2=bullish.
-        bear_prob = float(dir_probs[0])
-        neutral_prob = float(dir_probs[1])
-        bull_prob = float(dir_probs[2])
+        veto_threshold = float(params["model_veto_threshold"])
 
-        df_m5 = ctx.candles.get("M5")
-        if df_m5 is None or len(df_m5) < 15:
-            return None
-
-        atr = float((df_m5["high"] - df_m5["low"]).tail(14).mean())
-        if atr <= 0:
-            return None
-
-        sl_pts = atr * self.spec.params["sl_atr_mult"]
-        tp_pts = atr * self.spec.params["tp_atr_mult"]
-
-        # --- gate ----------------------------------------------------------
-        # This used to read `if bull_prob > bear_prob and bull_prob > 0.35`,
-        # which had two defects that together produced live trade
-        # #8731164505: a BUY into unmitigated supply at the top of structure,
-        # logged as "DL Buy (tp=0.57, bull=0.39, bear=0.17)".
-        #
-        #   1. The neutral class was never consulted. On that trade neutral
-        #      was 1 - 0.39 - 0.17 = 0.44 — the argmax. The model's actual
-        #      answer was "no directional opinion" and the code bought.
-        #   2. `min_tp_prob` and `min_direction_conf` were declared in
-        #      `spec.params` and never read; the real threshold was the
-        #      hardcoded 0.35. That trade breached both declared limits
-        #      (tp 0.57 < 0.60, bull 0.39 < 0.75) and was taken anyway, so
-        #      tuning those params — including via
-        #      `scripts/optimize_dl_thresholds.py` — changed nothing.
-        #
-        # Both declared thresholds are now the gate, and the directional
-        # class must actually win the softmax. With the current weights this
-        # makes the bot far more selective; that is the declared
-        # configuration finally taking effect, not a new restriction.
-        min_tp_prob = float(self.spec.params["min_tp_prob"])
-        min_direction_conf = float(self.spec.params["min_direction_conf"])
-
-        if tp_p < min_tp_prob:
-            return None
-        if neutral_prob >= max(bull_prob, bear_prob):
-            return None
-
-        if bull_prob > bear_prob and bull_prob >= min_direction_conf:
-            return Signal(
-                direction=Direction.BUY,
-                sl_points=sl_pts,
-                tp_points=tp_pts,
-                confidence=tp_p,
-                reason=(
-                    f"DL Buy (tp={tp_p:.2f}, bull={bull_prob:.2f}, "
-                    f"neutral={neutral_prob:.2f}, bear={bear_prob:.2f})"
-                ),
+        # Veto only when the model is *confidently against* direction:
+        if is_buy and bear_p >= veto_threshold and bear_p > bull_p:
+            return tp_p, True, (
+                "model-veto(bear=" + _f(bear_p) + ">=" + _f(veto_threshold) + ")"
             )
-        if bear_prob > bull_prob and bear_prob >= min_direction_conf:
-            return Signal(
-                direction=Direction.SELL,
-                sl_points=sl_pts,
-                tp_points=tp_pts,
-                confidence=tp_p,
-                reason=(
-                    f"DL Sell (tp={tp_p:.2f}, bull={bull_prob:.2f}, "
-                    f"neutral={neutral_prob:.2f}, bear={bear_prob:.2f})"
-                ),
+        if (not is_buy) and bull_p >= veto_threshold and bull_p > bear_p:
+            return tp_p, True, (
+                "model-veto(bull=" + _f(bull_p) + ">=" + _f(veto_threshold) + ")"
             )
 
-        return None
+        return (
+            tp_p,
+            False,
+            "model=ok(tp=" + _f(tp_p) + ",bull=" + _f(bull_p) + ",bear=" + _f(bear_p) + ")",
+        )
+
+
+def _f(v) -> str:
+    return str(round(float(v), 3))

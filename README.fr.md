@@ -39,6 +39,34 @@ La passerelle nécessite un terminal MT5 en cours d'exécution sous Wine
 (développement) ou sur un VPS Windows (trading réel). Voir
 [`gateway/README.fr.md`](gateway/README.fr.md) pour les instructions complètes.
 
+## Installation sur une autre machine
+
+**Guide d'installation complet :** voir [`INSTALL.fr.md`](INSTALL.fr.md)
+pour le déroulé complet et autonome (prérequis, chaque invite de
+l'installateur, Docker, désinstallation, dépannage, FAQ). Le résumé
+ci-dessous en est la version courte.
+
+Deux chemins d'installation, selon l'endroit où tourne la passerelle MT5 :
+
+- **Installateur CLI** — toute la pile y compris la passerelle, sur
+  n'importe quel OS. Met en place un terminal MT5 Windows/Wine (ou VPS
+  Windows) aux côtés du backend + frontend. Voir `installer/install.py`.
+- **Docker (backend + frontend uniquement)** — pour quand la passerelle
+  MT5 tourne déjà ailleurs, p. ex. un VPS Windows séparé joint par le
+  réseau via `TB_GATEWAY_URL` dans `.env`. Récupère des images prêtes à
+  l'emploi depuis Docker Hub au lieu de construire depuis les sources :
+  ```bash
+  cp .env.example .env   # puis réglez TB_GATEWAY_URL vers votre passerelle
+  docker compose -f docker-compose.prod.yml up -d
+  # ou : make docker-up-prod
+  ```
+  <!-- TODO : les images sont publiées sous l'espace de noms provisoire
+  "tradingbot" — à remplacer par le vrai nom d'utilisateur/organisation
+  Docker Hub une fois confirmé. --> Publiées par
+  [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+  lors d'un push de tag de version. La passerelle elle-même n'est
+  délibérément pas conteneurisée — voir `gateway/README.fr.md`.
+
 **Documentation de l'API backend** (une fois `make dev-backend` lancé) :
 interface Swagger interactive sur <http://localhost:8000/docs>, ReDoc sur
 <http://localhost:8000/redoc>, schéma brut sur

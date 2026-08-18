@@ -51,3 +51,139 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm build
+
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m unittest discover -s installer/tests -v
+      - uses: astral-sh/setup-uv@v4
+      - run: uvx ruff check installer/*.py
+
+  installer-windows:
+    # Exercises installer/services/windows/install_services.ps1 and
+    # uninstall_services.ps1 against a real Windows Task Scheduler --
+    # these scripts were written against documented ScheduledTasks-module
+    # behavior but had never been run on real Windows before this job
+    # existed. windows-latest gives us a disposable VM with a real Task
+    # Scheduler service, so this is a real integration test, not a syntax
+    # check.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fixture installer/state.json + .env
+        shell: pwsh
+        run: |
+          # Shape matches wizard.answers_to_state() (installer/wizard.py) --
+          # two accounts, one with a terminal_path and one without, adapted
+          # from installer/tests/test_services_linux.py's _fake_state().
+          $state = @{
+            install_dir       = "$env:GITHUB_WORKSPACE"
+            wine_prefix       = $null
+            run_wine_setup    = $false
+            autostart_on_boot = $true
+            accounts          = @(
+              @{
+                id                 = "default"
+                label              = "Primary MT5 account"
+                mode               = "paper"
+                gateway_host       = "127.0.0.1"
+                gateway_port       = 8787
+                terminal_path      = "C:\MT5\Primary\terminal64.exe"
+                gateway_secret_env = "TB_GATEWAY_SHARED_SECRET"
+              },
+              @{
+                id                 = "ftmo-1"
+                label              = "FTMO account"
+                mode               = "live"
+                gateway_host       = "127.0.0.1"
+                gateway_port       = 8788
+                terminal_path      = $null
+                gateway_secret_env = "TB_GATEWAY_SHARED_SECRET_FTMO_1"
+              }
+            )
+          }
+          $stateJsonPath = Join-Path $env:GITHUB_WORKSPACE "installer\state.json"
+          $state | ConvertTo-Json -Depth 5 | Set-Content -Path $stateJsonPath -Encoding utf8
+
+          # install_services.ps1's Read-DotEnvValue degrades to "" for any
+          # var it can't find, so a plain copy of .env.example with fake
+          # placeholder values is a fine fixture.
+          Copy-Item -Path (Join-Path $env:GITHUB_WORKSPACE ".env.example") -Destination (Join-Path $env:GITHUB_WORKSPACE ".env")
+
+      - name: Register scheduled tasks
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer\services\windows\install_services.ps1 -RepoRoot $env:GITHUB_WORKSPACE -StateJsonPath $env:GITHUB_WORKSPACE\installer\state.json
+
+      - name: Assert every expected scheduled task was registered
+        shell: pwsh
+        run: |
+          $names = @(Get-ScheduledTask -TaskName 'TradingBot-*' | Select-Object -ExpandProperty TaskName | Sort-Object)
+          Write-Host "Registered tasks: $($names -join ', ')"
+
+          # backend + frontend + (gateway + terminal) per account (2 accounts)
+          $expected = @(
+            'TradingBot-Backend',
+            'TradingBot-Frontend',
+            'TradingBot-Gateway-default',
+            'TradingBot-Gateway-ftmo-1',
+            'TradingBot-Terminal-default',
+            'TradingBot-Terminal-ftmo-1'
+          ) | Sort-Object
+
+          if ($names.Count -ne $expected.Count -or (Compare-Object $names $expected)) {
+            Write-Error "Expected exactly: $($expected -join ', ') -- got: $($names -join ', ')"
+            exit 1
+          }
+          Write-Host "OK: all $($expected.Count) expected scheduled tasks were registered."
+
+      - name: Assert gateway launcher carries the account's terminal path
+        shell: pwsh
+        run: |
+          # Regression check for the cross-account terminal-isolation fix:
+          # every gateway launcher must embed MT5_TERMINAL_PATH for its own
+          # account, never blank / never another account's path.
+          $launcher = Join-Path $env:GITHUB_WORKSPACE "installer\services\windows\generated\gateway-default.cmd"
+          if (-not (Test-Path $launcher)) {
+            Write-Error "Expected generated launcher not found: $launcher"
+            exit 1
+          }
+          $content = Get-Content -Raw -Path $launcher
+          $expectedLine = "set MT5_TERMINAL_PATH=C:\MT5\Primary\terminal64.exe"
+          if ($content -notmatch [regex]::Escape($expectedLine)) {
+            Write-Error "Expected line '$expectedLine' in $launcher`nActual content:`n$content"
+            exit 1
+          }
+          Write-Host "OK: gateway-default.cmd carries the fixture account's MT5_TERMINAL_PATH."
+
+      - name: Uninstall scheduled tasks
+        shell: pwsh
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer\services\windows\uninstall_services.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+
+      - name: Assert every scheduled task was removed
+        shell: pwsh
+        run: |
+          $tasks = Get-ScheduledTask -TaskName 'TradingBot-*' -ErrorAction SilentlyContinue
+          if ($tasks) {
+            Write-Error "Expected no 'TradingBot-*' scheduled tasks after uninstall, found: $(($tasks | Select-Object -ExpandProperty TaskName) -join ', ')"
+            exit 1
+          }
+          Write-Host "OK: uninstall removed every 'TradingBot-*' scheduled task."
+
+  docker-build:
+    # Proves both production Dockerfiles actually build to completion under
+    # normal network conditions -- the dev sandbox these were written in had
+    # very slow/rate-limited npm registry access and could never finish a
+    # full `docker build`. Build only: no push, no registry login, no secrets.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - run: docker build -f backend/Dockerfile -t backend:ci-check backend
+      - run: docker build -f frontend/Dockerfile -t frontend:ci-check frontend

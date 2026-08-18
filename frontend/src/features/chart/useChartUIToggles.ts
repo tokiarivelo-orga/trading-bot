@@ -8,12 +8,14 @@
  *
  * Known follow-up (not fixed here): the localStorage keys used below
  * (`chart-show-separators`, `chart-show-spread-line`, `chart-show-trade-labels`,
+ * `chart-show-economic-calendar`, `chart-economic-calendar-impact`,
  * and `chart-order-line-style` via chartStorage.ts) are global, not scoped
  * per-symbol/per-pane — a future multi-pane feature will need to namespace
  * them.
  */
 
 import { useEffect, useRef, useState } from "react";
+import type { ImpactLevel } from "@/shared/api/client";
 import type { OrderLineStyle, ZoneColorStyle } from "./types";
 import {
   loadOrderLineStyle,
@@ -21,6 +23,8 @@ import {
   saveOrderLineStyle,
   saveZoneColorStyle,
 } from "./chartStorage";
+
+export type ImpactFilter = 'ALL' | ImpactLevel;
 
 export function useChartUIToggles() {
   const [showTfDropdown, setShowTfDropdown] = useState(false);
@@ -107,46 +111,58 @@ export function useChartUIToggles() {
   // symbol with many trades stacks these into unreadable overlapping text
   // (the arrows/colors alone still show direction). Toggling this off blanks
   // just the label, the marker shape/color/position stays.
-  const [showTradeLabels, setShowTradeLabels] = useState<boolean>(() => {
+  const [showTradeBadges, setShowTradeBadges] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('chart-ui-trade-badges');
+      if (stored !== null) return stored === 'true';
+    }
+    return true; // Default ON
+  });
+
+  function toggleTradeBadges(): void {
+    setShowTradeBadges((prev) => {
+      const next = !prev;
+      localStorage.setItem('chart-ui-trade-badges', String(next));
+      return next;
+    });
+  }
+
+  const [showEconomicCalendar, setShowEconomicCalendar] = useState<boolean>(() => {
     try {
-      const stored = localStorage.getItem("chart-show-trade-labels");
-      return stored ? stored === "true" : false;
+      const stored = localStorage.getItem("chart-show-economic-calendar");
+      return stored ? stored === "true" : true;
     } catch {
-      return false;
+      return true;
     }
   });
 
-  function toggleTradeLabels(): void {
-    setShowTradeLabels((prev) => {
+  function toggleEconomicCalendar(): void {
+    setShowEconomicCalendar((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem("chart-show-trade-labels", String(next));
+        localStorage.setItem("chart-show-economic-calendar", String(next));
       } catch {}
       return next;
     });
   }
 
-  // The entry-arrow markers themselves — off by default. Independent of
-  // `showTradeLabels` above (which only blanks the text): toggling this off
-  // hides the arrow/circle shapes entirely, for reading raw price action on a
-  // symbol whose chart is papered over with trade markers.
-  const [showTradeMarkers, setShowTradeMarkers] = useState<boolean>(() => {
+  const [economicCalendarImpactFilter, setEconomicCalendarImpactFilter] = useState<ImpactFilter>(() => {
     try {
-      const stored = localStorage.getItem("chart-show-trade-markers");
-      return stored ? stored === "true" : false;
+      const stored = localStorage.getItem("chart-economic-calendar-impact");
+      if (stored === 'high' || stored === 'medium' || stored === 'low') {
+        return stored as ImpactFilter;
+      }
+      return 'ALL';
     } catch {
-      return false;
+      return 'ALL';
     }
   });
 
-  function toggleTradeMarkers(): void {
-    setShowTradeMarkers((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("chart-show-trade-markers", String(next));
-      } catch {}
-      return next;
-    });
+  function updateEconomicCalendarImpactFilter(val: ImpactFilter): void {
+    setEconomicCalendarImpactFilter(val);
+    try {
+      localStorage.setItem("chart-economic-calendar-impact", val);
+    } catch {}
   }
 
   // Style for the selected trade's open/close lines (see
@@ -214,10 +230,12 @@ export function useChartUIToggles() {
     toggleSpreadLine,
     showVolume,
     toggleVolume,
-    showTradeLabels,
-    toggleTradeLabels,
-    showTradeMarkers,
-    toggleTradeMarkers,
+    showTradeBadges,
+    toggleTradeBadges,
+    showEconomicCalendar,
+    toggleEconomicCalendar,
+    economicCalendarImpactFilter,
+    updateEconomicCalendarImpactFilter,
     orderLineStyle,
     updateOrderLineStyle,
     showOrderLineSettings,

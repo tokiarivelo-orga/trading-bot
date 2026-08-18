@@ -1,0 +1,53 @@
+# Production stack — pulls PREBUILT images from Docker Hub (backend +
+# frontend only). This is the complementary distribution path to:
+#   - the CLI installer (full stack incl. the MT5 gateway, any OS —
+#     installer/install.py, a separate track)
+#   - the dev docker-compose.yml (builds from source, live pnpm dev server)
+#
+# For users who already run (or will separately run) the MT5 gateway
+# elsewhere — e.g. a Windows VPS reached over the network via TB_GATEWAY_URL
+# in .env — and just want `docker pull` + `docker compose up` for the
+# backend/frontend half. Building from source stays in the dev
+# docker-compose.yml and in backend/Dockerfile's own `docker build`.
+#
+# The MT5 gateway is NOT here, same as the dev stack: it needs a Windows
+# environment (Wine or a Windows VPS) with a running MT5 terminal — see
+# gateway/README.md. It is not, and will not be, containerized (Wine-in-a-
+# container GUI/rendering/sleep issues aren't worth it — decided, not
+# revisited here).
+#
+# Usage:
+#   cp .env.example .env && edit it (set TB_GATEWAY_URL to your gateway)
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# Image refs are env-var-overridable so this file also works against a
+# locally built image for testing, e.g.:
+#   DOCKERHUB_NAMESPACE=tradingbot IMAGE_TAG=local docker compose -f docker-compose.prod.yml up -d
+
+services:
+  backend:
+    # <!-- TODO: "tradingbot" is a placeholder Docker Hub namespace/org —
+    # swap for the real published namespace once confirmed (see
+    # .github/workflows/docker-publish.yml). -->
+    image: ${DOCKERHUB_NAMESPACE:-tradingbot}/backend:${IMAGE_TAG:-latest}
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./data:/app/data
+    restart: unless-stopped
+
+  frontend:
+    # <!-- TODO: "tradingbot" is a placeholder Docker Hub namespace/org —
+    # swap for the real published namespace once confirmed (see
+    # .github/workflows/docker-publish.yml). -->
+    image: ${DOCKERHUB_NAMESPACE:-tradingbot}/frontend:${IMAGE_TAG:-latest}
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped

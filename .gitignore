@@ -30,6 +30,7 @@ data/
 
 # Per-account gateway PID files (make dev-gateway ACCOUNT=<id>)
 gateway/run/
+installer/state.json
 
 # Backtest outputs
 backend/src/backtest/reports/*

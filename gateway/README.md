@@ -10,6 +10,14 @@ the rest of the system can run natively on Linux.
 ticks, spread, positions) and executes explicit order commands. All decisions
 happen in `backend/`.
 
+> Setting this up on a machine other than your own dev checkout? Everything
+> below this point — Wine provisioning, terminal configuration, the
+> Makefile's per-account gateway commands — has a scripted equivalent in
+> `installer/install.py` (see the repo root `README.md`'s "Installing on
+> another machine"). This file stays the full manual reference: what the
+> installer actually runs under the hood, and what to read when something
+> needs troubleshooting by hand.
+
 ## Why it exists
 
 The `MetaTrader5` pip package requires a running MT5 **desktop terminal** and

@@ -9,6 +9,9 @@ import type { DrawingManager } from 'lightweight-charts-drawing';
 import {
   type BacktestSignal,
   type Candle,
+  type NewsEventRecord,
+  type BacktestTrade,
+  type TradeMarker,
   type PositionOut,
   type SymbolInfo,
 } from '@/shared/api/client';
@@ -141,6 +144,23 @@ export interface SignalTooltipState {
   x: number;
   y: number;
   signals: BacktestSignal[];
+  containerWidth: number;
+  containerHeight: number;
+}
+
+/** Floating read-only popover state for a clicked news event marker. */
+export interface NewsTooltipState {
+  x: number;
+  y: number;
+  events: NewsEventRecord[];
+  containerWidth: number;
+  containerHeight: number;
+}
+
+export interface TradeTooltipState {
+  x: number;
+  y: number;
+  trades: (TradeMarker | BacktestTrade)[];
   containerWidth: number;
   containerHeight: number;
 }

@@ -10,13 +10,26 @@
 # shared secret (e.g. TB_GATEWAY_SHARED_SECRET) — the secret itself is never
 # written here, per the project's "secrets only via .env / OS keyring" rule.
 #
-# `mt5_terminal_subpath` (optional): path to this account's own
-# terminal64.exe, relative to the Wine prefix's drive_c/. MetaTrader5 only
-# supports one logged-in account per terminal instance, so every account
-# beyond the first needs its own portable terminal install and must set
-# this — otherwise its gateway attaches to whatever terminal is already
-# running and can silently log another account out. Omit for the primary
-# account (keeps today's single-terminal behavior).
+# `mt5_terminal_path` (optional, preferred): absolute, OS-native path to this
+# account's own terminal64.exe — a plain Windows path on a native Windows
+# install, or an absolute Linux path for Wine (e.g. "/home/user/.mt5/drive_c/
+# Program Files/MetaTrader 5/terminal64.exe"). MetaTrader5 only supports one
+# logged-in account per terminal instance, so every account beyond the first
+# needs its own portable terminal install and must set this (or
+# `mt5_terminal_subpath` below) — otherwise its gateway attaches to whatever
+# terminal is already running and can silently log another account out. Use
+# this field for new entries: it works for native Windows installs (no Wine
+# prefix at all) and for Wine setups regardless of where the prefix lives on
+# that machine. Takes precedence over `mt5_terminal_subpath` when both are
+# set. Omit for the primary account (keeps today's single-terminal
+# behavior).
+#
+# `mt5_terminal_subpath` (optional, legacy): path to this account's own
+# terminal64.exe, relative to the Wine prefix's drive_c/ (e.g.
+# "MT5-demo-1/terminal64.exe"), resolved against whichever Wine prefix the
+# invoking Makefile/shell has configured (WINEPREFIX / TB_WINEPREFIX). Still
+# fully supported for existing Linux/Wine setups — prefer
+# `mt5_terminal_path` for new entries instead.
 accounts:
   - id: default
     label: "Primary MT5 account"

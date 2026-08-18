@@ -77,6 +77,7 @@ def main(argv: list[str]) -> int:
     print(f"export TB_RESOLVED_GATEWAY_HOST={shlex.quote(parsed.hostname)}")
     print(f"export TB_RESOLVED_GATEWAY_PORT={shlex.quote(str(parsed.port))}")
     print(f"export TB_RESOLVED_GATEWAY_SECRET_ENV={shlex.quote(account.gateway_shared_secret_env)}")
+    print(f"export TB_RESOLVED_TERMINAL_PATH={shlex.quote(account.mt5_terminal_path or '')}")
     print(f"export TB_RESOLVED_TERMINAL_SUBPATH={shlex.quote(account.mt5_terminal_subpath or '')}")
     return 0
 

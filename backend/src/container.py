@@ -18,6 +18,7 @@ time.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import time
@@ -156,6 +157,8 @@ from src.strategies.generated.trend_structure_v1 import TrendStructureV1
 from src.strategies.generated.trend_structure_v2 import TrendStructureV2
 from src.strategies.registry import StrategyRegistry
 
+logger = logging.getLogger(__name__)
+
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills" / "normal"
 _NEWS_SKILLS_DIR = Path(__file__).resolve().parent / "skills" / "news"
 _STRATEGIES_GENERATED_DIR = Path(__file__).resolve().parent / "strategies" / "generated"
@@ -249,13 +252,28 @@ def _baseline_strategies() -> list[tuple[str, Strategy]]:
     trend_structure_v1 = TrendStructureV1()
     trend_structure_v2 = TrendStructureV2()
     mean_reversion_v1 = MeanReversionV1()
-    return [
+    strategies = [
         (breakout_v1.spec.name, breakout_v1),
         (breakout_v2.spec.name, breakout_v2),
         (trend_structure_v1.spec.name, trend_structure_v1),
         (trend_structure_v2.spec.name, trend_structure_v2),
         (mean_reversion_v1.spec.name, mean_reversion_v1),
     ]
+    try:
+        from src.strategies.generated.smc_dl_m5_step200_v1 import SmcDlM5Step200
+        smc_step200 = SmcDlM5Step200()
+        strategies.append((smc_step200.spec.name, smc_step200))
+    except Exception:
+        logger.warning("smc_dl_m5_step200 skipped (model weights missing or torch error)")
+
+    try:
+        from src.strategies.generated.smc_dl_m5_v1 import SmcDlM5V1
+        smc_v1 = SmcDlM5V1()
+        strategies.append((smc_v1.spec.name, smc_v1))
+    except Exception:
+        logger.warning("smc_dl_m5 skipped (model weights missing or torch error)")
+
+    return strategies
 
 
 @dataclass

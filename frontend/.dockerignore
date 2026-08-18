@@ -1,0 +1,10 @@
+# Keeps the build context small — node_modules/.next are reinstalled/rebuilt
+# inside the image, never copied in from the host (avoids arch mismatches).
+node_modules/
+.next/
+out/
+.git/
+.gitignore
+.env
+.env.*
+*.log

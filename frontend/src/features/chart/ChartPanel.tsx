@@ -30,6 +30,7 @@ import {
   type Candle,
   type NewsEventRecord,
   type TradeMarker,
+  type BacktestTrade,
   type StrategyVersionSummary,
   evaluateCustomCode,
 } from '@/shared/api/client';
@@ -50,7 +51,11 @@ import { ReplayControls } from './ReplayControls';
 import { ReplayRevealOverlay } from './ReplayRevealOverlay';
 import { ZoneInfoPopover } from './ZoneInfoPopover';
 import { SignalInfoPopover } from './SignalInfoPopover';
-import type { SignalTooltipState, ZoneTooltipState } from './types';
+import { NewsInfoPopover } from './NewsInfoPopover';
+import { TradeInfoPopover } from './TradeInfoPopover';
+import { TradeBadges } from './TradeBadges';
+import { NewsAxisMarkers } from './NewsAxisMarkers';
+import type { SignalTooltipState, ZoneTooltipState, NewsTooltipState, TradeTooltipState } from './types';
 import { SessionReplayPicker } from './SessionReplayPicker';
 import { SignalsDock } from './SignalsDock';
 import { useBacktestData } from './useBacktestData';
@@ -252,10 +257,12 @@ export function ChartPanel({
     toggleSpreadLine,
     showVolume,
     toggleVolume,
-    showTradeLabels,
-    toggleTradeLabels,
-    showTradeMarkers,
-    toggleTradeMarkers,
+    showTradeBadges,
+    toggleTradeBadges,
+    showEconomicCalendar,
+    toggleEconomicCalendar,
+    economicCalendarImpactFilter,
+    updateEconomicCalendarImpactFilter,
     orderLineStyle,
     updateOrderLineStyle,
     showOrderLineSettings,
@@ -570,6 +577,9 @@ export function ChartPanel({
   const [signalTooltip, setSignalTooltip] = useState<SignalTooltipState | null>(
     null,
   );
+  
+  const [newsTooltip, setNewsTooltip] = useState<NewsTooltipState | null>(null);
+  const [tradeTooltip, setTradeTooltip] = useState<TradeTooltipState | null>(null);
 
   // Stable references for symbol and symbol-switching state to avoid stale
   // closures inside the chart-creation useEffect.
@@ -681,9 +691,8 @@ export function ChartPanel({
     replayCursorIndex,
     customCodeResult,
     orderLineStyle,
-    showTradeLabels,
-    showTradeMarkers,
     zoneColorStyle,
+    activeHighlightedTicket,
   });
 
   // Transient blinking "BUY HERE"/"SELL HERE"/exit flashes emitted as the
@@ -1124,10 +1133,10 @@ export function ChartPanel({
   // by this phase. Always-on (no toolbar toggle): wiring one in would mean
   // touching `ChartToolbarProps`/`ChartToolbar.tsx`, out of scope here (see
   // this file's other news-marker comments).
-  const [newsEventMarkers, setNewsEventMarkers] = useState<SeriesMarker<Time>[]>([]);
+  const [newsEvents, setNewsEvents] = useState<NewsEventRecord[]>([]);
   useEffect(() => {
     if (backtestReportId || liveBotSkill || !accountId) {
-      setNewsEventMarkers([]);
+      setNewsEvents([]);
       return;
     }
     let cancelled = false;
@@ -1137,7 +1146,9 @@ export function ChartPanel({
       end: nowSeconds + 30 * 86400,
     })
       .then((events: NewsEventRecord[]) => {
-        if (!cancelled) setNewsEventMarkers(toNewsEventSeriesMarkers(events));
+        if (!cancelled) {
+          setNewsEvents(events);
+        }
       })
       .catch(() => {
         // Calendar unreachable — leave whatever news markers are already drawn.
@@ -1146,6 +1157,18 @@ export function ChartPanel({
       cancelled = true;
     };
   }, [accountId, backtestReportId, liveBotSkill]);
+
+  const filteredNewsEvents = useMemo(() => {
+    if (!showEconomicCalendar) return [];
+    if (economicCalendarImpactFilter === 'ALL') return newsEvents;
+    if (economicCalendarImpactFilter === 'high') {
+      return newsEvents.filter(e => e.impact === 'high');
+    }
+    if (economicCalendarImpactFilter === 'medium') {
+      return newsEvents.filter(e => e.impact === 'medium' || e.impact === 'high');
+    }
+    return newsEvents;
+  }, [newsEvents, showEconomicCalendar, economicCalendarImpactFilter]);
 
   // Poll trade markers (F7): entry arrows + exit circles from the journal,
   // plus an entry->exit oblique line (LIVE_TRADE_DRAWING_PREFIX) for each
@@ -1178,12 +1201,8 @@ export function ChartPanel({
     };
     if (customCodeResult) {
       seriesMarkersRef.current?.setMarkers(
-        [
-          ...(showTradeMarkers
-            ? toCustomSignalsSeriesMarkers(customCodeResult.signals, colors, showTradeLabels)
-            : []),
-          ...newsEventMarkers,
-        ].sort((a, b) => (a.time as number) - (b.time as number)),
+        toCustomSignalsSeriesMarkers(customCodeResult.signals, colors, true)
+          .sort((a, b) => (a.time as number) - (b.time as number)),
       );
       clearLiveTradeLines();
       return;
@@ -1211,10 +1230,8 @@ export function ChartPanel({
             ? trades.filter((t) => String(t.id) === String(activeHighlightedTicket))
             : trades;
         seriesMarkersRef.current?.setMarkers(
-          [
-            ...(showTradeMarkers ? toSeriesMarkers(displayTrades, colors, showTradeLabels) : []),
-            ...newsEventMarkers,
-          ].sort((a, b) => (a.time as number) - (b.time as number)),
+          toSeriesMarkers(displayTrades, colors, true)
+            .sort((a, b) => (a.time as number) - (b.time as number)),
         );
         setClosedTrades(trades);
         clearLiveTradeLines();
@@ -1243,10 +1260,7 @@ export function ChartPanel({
     liveBotSkill,
     customCodeResult,
     orderLineStyle,
-    showTradeLabels,
     activeHighlightedTicket,
-    showTradeMarkers,
-    newsEventMarkers,
   ]);
 
   // A trade-history row can be arbitrarily far in the past (unlike an open
@@ -1416,6 +1430,117 @@ export function ChartPanel({
     // mount/unmount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartController]);
+
+  // News click-to-inspect: clicking a news marker bubble opens a popover
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    const container = containerRef.current;
+    if (!chart || !series || !container || filteredNewsEvents.length === 0) return;
+    const handler = (param: MouseEventParams) => {
+      if (!param.point) return;
+      
+      const time =
+        (param.time as number | undefined) ??
+        (chart.timeScale().coordinateToTime(param.point.x) as number | null) ??
+        null;
+      if (time === null) return;
+      
+      const candles = candlesRef.current;
+      const barTime = nearestCandleTime(candles, time);
+      if (barTime === null) return;
+      
+      // News markers are placed at exactly their event.time, but their
+      // hit-test location resolves to their nearest candle time on the chart.
+      const hits = filteredNewsEvents.filter(
+        (e) => nearestCandleTime(candles, e.time) === barTime
+      );
+      if (hits.length === 0) return;
+
+      const candle = candles.find((c) => c.time === barTime);
+      if (!candle) return;
+      const lowY = series.priceToCoordinate(candle.low);
+      if (lowY === null) return;
+      
+      const y = param.point.y;
+      const BAND = 44;
+      const SLACK = 6;
+      // Below bar
+      if (y >= lowY - SLACK && y <= lowY + BAND) {
+        setNewsTooltip({
+          x: param.point.x,
+          y,
+          events: hits.sort((a, b) => a.time - b.time),
+          containerWidth: container.clientWidth,
+          containerHeight: container.clientHeight,
+        });
+      }
+    };
+    chart.subscribeClick(handler);
+    return () => chart.unsubscribeClick(handler);
+  }, [filteredNewsEvents]);
+
+  // Trade click-to-inspect: clicking a trade marker bubble opens a popover
+  useEffect(() => {
+    const chart = chartRef.current;
+    const series = candleSeriesRef.current;
+    const container = containerRef.current;
+    const activeTrades = (backtestReportId || liveBotSkill ? backtestTrades : closedTrades) || [];
+    if (!chart || !series || !container || activeTrades.length === 0) return;
+    const handler = (param: MouseEventParams) => {
+      if (!param.point) return;
+      
+      const time =
+        (param.time as number | undefined) ??
+        (chart.timeScale().coordinateToTime(param.point.x) as number | null) ??
+        null;
+      if (time === null) return;
+      
+      const candles = candlesRef.current;
+      const barTime = nearestCandleTime(candles, time);
+      if (barTime === null) return;
+      
+      // For backtestTrades, close_time is always present, for TradeMarker it might be null
+      const exitHits = activeTrades.filter(
+        (t) => t.close_time && nearestCandleTime(candles, t.close_time) === barTime
+      );
+      if (exitHits.length === 0) return;
+
+      const candle = candles.find((c) => c.time === barTime);
+      if (!candle) return;
+      const lowY = series.priceToCoordinate(candle.low);
+      const highY = series.priceToCoordinate(candle.high);
+      if (lowY === null || highY === null) return;
+      
+      const y = param.point.y;
+      const SLACK = 6;
+      
+      const matched: (TradeMarker | BacktestTrade)[] = [];
+      
+      // Exits are in-bar (middle of the candle or around close_price)
+      // Usually close to the candle body
+      for (const t of exitHits) {
+         if (y >= highY - SLACK && y <= lowY + SLACK) {
+           matched.push(t);
+         }
+      }
+
+      if (matched.length === 0) return;
+
+      // Ensure distinct items
+      const uniqueMatched = Array.from(new Set(matched));
+
+      setTradeTooltip({
+        x: param.point.x,
+        y,
+        trades: uniqueMatched,
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
+      });
+    };
+    chart.subscribeClick(handler);
+    return () => chart.unsubscribeClick(handler);
+  }, [closedTrades, backtestTrades, backtestReportId, liveBotSkill]);
 
   // Draggable SL/TP/trigger-price lines: recompute pixel positions on
   // pan/zoom/resize (prices themselves come from `trading` polling, which
@@ -1886,16 +2011,23 @@ export function ChartPanel({
     onToggleSpreadLine: toggleSpreadLine,
     showVolume,
     onToggleVolume: toggleVolume,
-    showTradeLabels,
-    onToggleTradeLabels: toggleTradeLabels,
-    showTradeMarkers,
-    onToggleTradeMarkers: toggleTradeMarkers,
+    showTradeBadges,
+    onToggleTradeBadges: toggleTradeBadges,
+    showEconomicCalendar,
+    onToggleEconomicCalendar: toggleEconomicCalendar,
+    economicCalendarImpactFilter,
+    onSelectEconomicCalendarImpactFilter: updateEconomicCalendarImpactFilter,
     orderLineVisible: orderLineStyle.visible,
     onToggleOrderLinesVisible: () => updateOrderLineStyle({ visible: !orderLineStyle.visible }),
     showOrderLineSettings,
     onToggleOrderLineSettings: () => setShowOrderLineSettings((v) => !v),
     showZoneColorSettings,
     onToggleZoneColorSettings: () => setShowZoneColorSettings((v) => !v),
+    candleGapCount: 0,
+    candleGapMissingBars: 0,
+    candleGapRepairing: false,
+    candleGapResult: null,
+    onRepairCandleGaps: () => {},
     backtestReportId,
     sessionReplayPeriod,
     showSessionReplayPicker,
@@ -1909,6 +2041,7 @@ export function ChartPanel({
     drawingTool: drawingTools.drawingTool,
     pendingAnchorCount: drawingTools.pendingAnchorCount,
     spreadPoints: chartRenderController.spreadPoints,
+    windowCount: windowCount,
     volatilityGuardEnabled: volatilityGuard.config?.enabled ?? null,
     volatilityGuardSaving: volatilityGuard.isSaving,
     onToggleVolatilityGuard: () => {
@@ -1937,8 +2070,7 @@ export function ChartPanel({
     showSeparators,
     showSpreadLine,
     showVolume,
-    showTradeLabels,
-    showTradeMarkers,
+    showTradeBadges,
     orderLineStyle.visible,
     showOrderLineSettings,
     showZoneColorSettings,
@@ -2856,6 +2988,42 @@ export function ChartPanel({
           chartRef={chartRef}
           candleSeriesRef={candleSeriesRef}
         />
+        {showTradeBadges && (
+          <TradeBadges
+            chart={chartController?.isReady ? chartController.getChart() : null}
+            series={candleSeriesRef.current}
+            trades={backtestReportId || liveBotSkill ? backtestTrades || [] : closedTrades || []}
+            candles={candlesRef.current}
+            width={containerRef.current?.clientWidth ?? 0}
+            height={containerRef.current?.clientHeight ?? 0}
+            onClick={(x, y, group) => {
+              if (!containerRef.current) return;
+              setTradeTooltip({
+                x,
+                y: y - containerRef.current.getBoundingClientRect().top,
+                trades: group,
+                containerWidth: containerRef.current.clientWidth,
+                containerHeight: containerRef.current.clientHeight,
+              });
+            }}
+          />
+        )}
+        <NewsAxisMarkers
+          chart={chartController?.isReady ? chartController.getChart() : null}
+          newsEvents={filteredNewsEvents}
+          candles={candlesRef.current}
+          width={containerRef.current?.clientWidth ?? 0}
+          onClick={(x, y, events) => {
+            if (!containerRef.current) return;
+            setNewsTooltip({
+              x,
+              y: y - containerRef.current.getBoundingClientRect().top,
+              events,
+              containerWidth: containerRef.current.clientWidth,
+              containerHeight: containerRef.current.clientHeight,
+            });
+          }}
+        />
         {signalTooltip && (
           <SignalInfoPopover
             x={signalTooltip.x}
@@ -2874,6 +3042,29 @@ export function ChartPanel({
             containerWidth={zoneTooltip.containerWidth}
             containerHeight={zoneTooltip.containerHeight}
             onClose={() => setZoneTooltip(null)}
+          />
+        )}
+        
+        {newsTooltip && (
+          <NewsInfoPopover
+            x={newsTooltip.x}
+            y={newsTooltip.y}
+            events={newsTooltip.events}
+            containerWidth={newsTooltip.containerWidth}
+            containerHeight={newsTooltip.containerHeight}
+            onClose={() => setNewsTooltip(null)}
+          />
+        )}
+        
+        {tradeTooltip && (
+          <TradeInfoPopover
+            x={tradeTooltip.x}
+            y={tradeTooltip.y}
+            trades={tradeTooltip.trades}
+            containerWidth={tradeTooltip.containerWidth}
+            containerHeight={tradeTooltip.containerHeight}
+            onClose={() => setTradeTooltip(null)}
+            onSelectTrade={(idOrIndex) => onSelectTicket?.(idOrIndex, symbol)}
           />
         )}
         {newsBands.map((b) => {

@@ -23,17 +23,57 @@ try:
 except ImportError:  # pragma: no cover - Linux dev machines
     mt5 = None
 
-# Set by the launcher (Makefile, from configs/accounts.yaml's
-# mt5_terminal_subpath) to this account's own terminal64.exe path, relative
-# to the Wine prefix's drive_c/ (forward slashes, e.g.
-# "MT5-demo-1/terminal64.exe"). Left unset for the primary/default account,
-# which keeps attaching to whatever terminal is already running — unchanged
-# from pre-multi-account behavior. Required for any second concurrent
-# account: MetaTrader5.initialize() with no path attaches to *any*
-# already-running terminal, so two gateway processes sharing one terminal
-# instance would silently log each other out.
+# Set by the launcher (Makefile's dev-gateway, or the installer's generated
+# systemd/Scheduled-Task services — see configs/accounts.yaml's
+# mt5_terminal_path/mt5_terminal_subpath) to this account's own
+# terminal64.exe path. Required for any second concurrent account:
+# MetaTrader5.initialize() with no path attaches to *any* already-running
+# terminal, so two gateway processes sharing one terminal instance would
+# silently log each other out. Two forms, checked in this order:
+#
+#   MT5_TERMINAL_PATH    — absolute path *as seen by the process running
+#                           this code*: a native "C:\..." path on real
+#                           Windows, or a host-absolute Linux path under
+#                           Wine (e.g. "/home/user/.mt5/drive_c/Program
+#                           Files/MetaTrader 5/terminal64.exe"). The Wine
+#                           case needs converting: MetaTrader5 runs *inside*
+#                           the Wine process, which sees its own C: drive,
+#                           not the host filesystem — so when the path
+#                           contains a "drive_c" segment, everything up to
+#                           and including it is stripped and the remainder
+#                           becomes the "C:\..." form. Left as-is otherwise
+#                           (native Windows already gives the right form).
+#   MT5_TERMINAL_SUBPATH — legacy form: path relative to the Wine prefix's
+#                           drive_c/ (e.g. "MT5-demo-1/terminal64.exe").
+#                           Still supported for existing setups; prefer
+#                           MT5_TERMINAL_PATH for new ones.
+#
+# Left unset for the primary/default account under `make dev` with no
+# accounts.yaml entry configured — keeps attaching to whatever terminal is
+# already running, unchanged from pre-multi-account behavior.
+
+
+def _windows_terminal_path(raw: str) -> str:
+    """Convert a host-absolute Wine terminal path to the "C:\\..." form
+    MetaTrader5 needs from inside the Wine process; pass a native Windows
+    path through unchanged (no "drive_c" segment to convert)."""
+    normalized = raw.replace("\\", "/")
+    marker = "drive_c/"
+    idx = normalized.lower().find(marker)
+    if idx == -1:
+        return raw
+    windows_relative = normalized[idx + len(marker) :]
+    return "C:\\" + windows_relative.replace("/", "\\")
+
+
+_TERMINAL_PATH_ENV = os.environ.get("MT5_TERMINAL_PATH") or None
 _TERMINAL_SUBPATH = os.environ.get("MT5_TERMINAL_SUBPATH") or None
-_TERMINAL_PATH = "C:\\" + _TERMINAL_SUBPATH.replace("/", "\\") if _TERMINAL_SUBPATH else None
+if _TERMINAL_PATH_ENV:
+    _TERMINAL_PATH = _windows_terminal_path(_TERMINAL_PATH_ENV)
+elif _TERMINAL_SUBPATH:
+    _TERMINAL_PATH = "C:\\" + _TERMINAL_SUBPATH.replace("/", "\\")
+else:
+    _TERMINAL_PATH = None
 
 
 class Mt5Error(Exception):

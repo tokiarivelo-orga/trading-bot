@@ -109,16 +109,25 @@ def compute_features_batch(candles_m5: pd.DataFrame, candles_m15: pd.DataFrame, 
     df['sin_dow'] = np.sin(2 * np.pi * ts_dow / 7)
     df['cos_dow'] = np.cos(2 * np.pi * ts_dow / 7)
     
-    # Multi-timeframe (Simplified padding)
-    df['htf_trend_m15'] = 0.0
-    df['htf_bos_m15'] = 0.0
-    df['htf_choch_m15'] = 0.0
-    df['htf_trend_h1'] = 0.0
-    df['htf_bos_h1'] = 0.0
-    df['htf_choch_h1'] = 0.0
-    df['htf_trend_h4'] = 0.0
-    df['htf_bos_h4'] = 0.0
-    df['htf_choch_h4'] = 0.0
+    # Multi-timeframe: actually compute trend/BOS/CHoCH from each HTF,
+    # then forward-fill (reindex) to align with M5 bars.
+    def _apply_htf(htf_df: pd.DataFrame, prefix: str) -> None:
+        if htf_df is None or htf_df.empty or len(htf_df) < 22:
+            df[f'htf_trend_{prefix}'] = 0.0
+            df[f'htf_bos_{prefix}']   = 0.0
+            df[f'htf_choch_{prefix}'] = 0.0
+            return
+        h = htf_df.copy()
+        h['_trend'] = np.where(h['close'] > h['close'].rolling(20).mean(), 1.0, -1.0)
+        h['_bos']   = (h['close'] > h['high'].rolling(20).max().shift()).astype(float)
+        h['_choch'] = (h['close'] < h['low'].rolling(20).min().shift()).astype(float)
+        for col, feat in [('_trend', 'trend'), ('_bos', 'bos'), ('_choch', 'choch')]:
+            merged = h[col].reindex(df.index, method='ffill')
+            df[f'htf_{feat}_{prefix}'] = merged.fillna(0.0)
+
+    _apply_htf(candles_m15, 'm15')
+    _apply_htf(candles_h1,  'h1')
+    _apply_htf(candles_h4,  'h4')
     
     # Base detection
     df['base_type'] = 0.0

@@ -73,21 +73,6 @@ export function toSeriesMarkers(
   showLabels = true,
 ): SeriesMarker<Time>[] {
   const markers: SeriesMarker<Time>[] = [];
-  const entryGroups = groupByKey(trades, (t) => `${t.open_time}:${t.side}`);
-  for (const group of entryGroups) {
-    const t = group[0];
-    markers.push({
-      time: t.open_time as UTCTimestamp,
-      position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: t.side === 'buy' ? colors.ok : colors.err,
-      shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
-      text: showLabels
-        ? group.length > 1
-          ? `${t.side.toUpperCase()} ×${group.length}`
-          : `${t.side.toUpperCase()} ${t.volume}`
-        : '',
-    });
-  }
   for (const t of trades) {
     if (t.close_time !== null) {
       markers.push({
@@ -156,23 +141,6 @@ export function toBacktestSeriesMarkers(
   showLabels = true,
 ): SeriesMarker<Time>[] {
   const markers: SeriesMarker<Time>[] = [];
-  const entryGroups = groupByKey(trades, (t) => `${t.open_time}:${t.side}`);
-  for (const group of entryGroups) {
-    const t = group[0];
-    markers.push({
-      time: t.open_time as UTCTimestamp,
-      position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: t.side === 'buy' ? colors.ok : colors.err,
-      shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown',
-      text: showLabels
-        ? group.length > 1
-          ? `${t.side.toUpperCase()} ×${group.length}`
-          : t.pattern
-            ? `${t.side.toUpperCase()} ${t.volume} · ${t.pattern}`
-            : `${t.side.toUpperCase()} ${t.volume}`
-        : '',
-    });
-  }
   for (const t of trades) {
     markers.push({
       time: t.close_time as UTCTimestamp,
@@ -333,15 +301,23 @@ export function toNewsEventSeriesMarkers(events: NewsEventRecord[]): SeriesMarke
     medium: cssVar('--color-sell'),
     low: cssVar('--color-ink-muted'),
   };
-  return events
-    .map((e) => ({
-      time: e.time as UTCTimestamp,
-      position: 'aboveBar' as const,
-      color: colorByImpact[e.impact] ?? cssVar('--color-accent'),
-      shape: 'square' as const,
-      text: `${e.impact.toUpperCase()} · ${e.name}`,
-    }))
-    .sort((a, b) => (a.time as number) - (b.time as number));
+  
+  const groups = groupByKey(events, (e) => String(e.time));
+  const markers: SeriesMarker<Time>[] = [];
+  for (const group of groups) {
+    const hasHigh = group.some(e => e.impact === 'high');
+    const hasMedium = group.some(e => e.impact === 'medium');
+    const color = hasHigh ? colorByImpact['high'] : (hasMedium ? colorByImpact['medium'] : colorByImpact['low']);
+    
+    markers.push({
+      time: group[0].time as UTCTimestamp,
+      position: 'belowBar' as const,
+      color: color ?? cssVar('--color-accent'),
+      shape: 'circle' as const,
+      text: '',
+    });
+  }
+  return markers.sort((a, b) => (a.time as number) - (b.time as number));
 }
 
 export function toCustomSignalsSeriesMarkers(

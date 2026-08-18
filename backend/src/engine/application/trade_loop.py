@@ -344,6 +344,11 @@ class TradeEngine:
     async def _try_enter(self, symbol: str, timeframe: str) -> None:
         now = self._clock()
         decisions = self._skill_selector.select_all(symbol, now)
+        if symbol == "Step Index 200":
+            logger.info(
+                "TRACE _try_enter symbol=%s timeframe=%s entry_tf=%s decisions=%r",
+                symbol, timeframe, self._entry_timeframe, decisions,
+            )
         if not decisions:
             if timeframe == self._entry_timeframe:
                 # DEBUG, not INFO (OBSERVABILITY_PLAN.md Phase 5 log hygiene):
@@ -394,6 +399,11 @@ class TradeEngine:
             # timeframe's candles already fetched by the time _enter_for_bot
             # runs confirm() against it.
             candidates.append((decision, _effective_strategy(strategy, decision)))
+        if symbol == "Step Index 200":
+            logger.info(
+                "TRACE _try_enter candidates symbol=%s timeframe=%s n_candidates=%d",
+                symbol, timeframe, len(candidates),
+            )
         if not candidates:
             return
 
@@ -579,7 +589,21 @@ class TradeEngine:
         # Evaluated ahead of the pretrade gate (unlike previously) so a
         # `close_on_opposite_signal` strategy can free up its own slot below
         # before the max-open-positions cap is checked against the count.
-        signal_res = strategy.evaluate(bot_ctx)
+        if symbol == "Step Index 200":
+            logger.info(
+                "TRACE _enter_for_bot pre-evaluate symbol=%s strategy=%s m5_bars=%s own_position=%s",
+                symbol,
+                strategy.spec.name,
+                len(bot_ctx.candles.get("M5", [])) if bot_ctx.candles.get("M5") is not None else None,
+                bot_ctx.own_position,
+            )
+        try:
+            signal_res = strategy.evaluate(bot_ctx)
+        except Exception:
+            logger.exception("TRACE _enter_for_bot evaluate raised symbol=%s strategy=%s", symbol, strategy.spec.name)
+            raise
+        if symbol == "Step Index 200":
+            logger.info("TRACE _enter_for_bot post-evaluate symbol=%s signal_res=%r", symbol, signal_res)
         if signal_res is None:
             return balance
         raw = tuple(signal_res) if isinstance(signal_res, (list, tuple)) else (signal_res,)

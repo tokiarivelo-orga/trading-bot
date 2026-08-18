@@ -1,0 +1,97 @@
+# Builds a downloadable source archive of the tagged commit and publishes it
+# as a GitHub Release, gated behind a sanity build of both the backend and
+# frontend so a release never goes out for a commit that doesn't actually
+# build.
+#
+# Triggers: push a version tag (e.g. `git tag v0.1.0 && git push origin
+# v0.1.0`), or run manually via Actions > Release > Run workflow.
+# Nothing here runs on every push/PR — it never fires on its own.
+#
+# Sibling to docker-publish.yml (same trigger convention, publishes the
+# multi-arch Docker images for this same tag) — see that workflow for the
+# image side of a release.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-check-backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run ruff check src tests
+      - run: uv run pytest
+
+  build-check-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4 # version comes from packageManager in package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+  release:
+    needs: [build-check-backend, build-check-frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=manual-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package release archives
+        run: |
+          git archive --format=zip --prefix=trading-bot-${{ steps.tag.outputs.version }}/ -o trading-bot-${{ steps.tag.outputs.version }}.zip HEAD
+          git archive --format=tar.gz --prefix=trading-bot-${{ steps.tag.outputs.version }}/ -o trading-bot-${{ steps.tag.outputs.version }}.tar.gz HEAD
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.version }}
+          name: ${{ steps.tag.outputs.version }}
+          files: |
+            trading-bot-*.zip
+            trading-bot-*.tar.gz
+          generate_release_notes: true
+          body: |
+            ## Getting started
+
+            Download one of the archives below, extract it, and run `installer/install.py` — it's a stdlib-only Python CLI wizard that sets everything up for you.
+
+            See `INSTALL.md` (or `INSTALL.fr.md` for French) in the archive for full setup instructions.
+
+            ## Docker images
+
+            This same tag also publishes multi-arch backend/frontend Docker images via the separate Docker Publish workflow.
+            <!-- TODO: placeholder namespace "tradingbot" -->
+            Images: `tradingbot/backend:${{ steps.tag.outputs.version }}` and `tradingbot/frontend:${{ steps.tag.outputs.version }}`.

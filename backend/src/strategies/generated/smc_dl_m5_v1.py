@@ -24,9 +24,30 @@ from src.strategies.generated.smc_dl_model import SmcMultiTaskNet
 from src.strategies.generated.smc_dl_features import compute_smc_features
 
 
-# Resolve model artifacts assuming the process runs with cwd=backend
-_BACKEND_DIR = Path(".").resolve()
-_MODELS_DIR = _BACKEND_DIR / "data" / "ml_models"
+# Resolve model artifacts in a way that works both during normal import
+# (where __file__ is defined) and inside the sandbox exec() context used by
+# validate_and_load (where __file__ is NOT set in the exec namespace).
+# When __file__ is available we anchor to it (always correct). When it
+# isn't (sandbox path) we walk upward from cwd looking for the first
+# ancestor that contains a 'data/ml_models' directory.
+def _resolve_models_dir() -> "Path":
+    try:
+        # Normal import: __file__ = backend/src/strategies/generated/smc_dl_m5_v1.py
+        # parents[3]                = backend/
+        return Path(__file__).resolve().parents[3] / "data" / "ml_models"
+    except NameError:
+        # Sandbox exec context: __file__ is not defined — walk up from cwd.
+        candidate = Path(".").resolve()
+        for _ in range(6):  # never walk more than 6 levels up
+            probe = candidate / "data" / "ml_models"
+            if probe.is_dir():
+                return probe
+            candidate = candidate.parent
+        # Final fallback: assume cwd is the backend directory.
+        return Path(".").resolve() / "data" / "ml_models"
+
+
+_MODELS_DIR = _resolve_models_dir()
 
 
 class SmcDlM5V1:

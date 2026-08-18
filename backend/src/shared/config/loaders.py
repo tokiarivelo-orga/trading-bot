@@ -201,6 +201,7 @@ def load_accounts_config(configs_dir: Path) -> list[AccountConfig]:
             mode=entry["mode"],
             enabled=entry.get("enabled", True),
             risk_override_file=entry.get("risk_override_file"),
+            mt5_terminal_path=entry.get("mt5_terminal_path"),
             mt5_terminal_subpath=entry.get("mt5_terminal_subpath"),
         )
         for entry in data.get("accounts", [])

@@ -17,6 +17,8 @@ import {
   cancelPendingOrder,
   closeAllPositions,
   closePosition,
+  modifyPosition,
+  modifyPendingOrder,
   type PendingOrderOut,
   type PositionOut,
   type TradeHistoryItem,
@@ -38,17 +40,8 @@ export function AllOrdersPanel({
   onClearSelection,
 }: {
   allPositions: AllPositions;
-  /** Ticket currently highlighted on the chart (see page.tsx's
-   * `selectedOrderTicket`) — used to mark the matching row so the table and
-   * chart stay in sync however the selection changed. */
   selectedTicket?: string | number | null;
-  /** Called with a row's ticket + symbol when clicked. The caller (page.tsx)
-   * owns toggling selection off on a repeat click and switching the chart to
-   * that symbol if it isn't already on screen. */
   onSelectTicket?: (ticket: string | number, symbol: string) => void;
-  /** Explicit clear, shown as a button next to the tabs whenever something
-   * is selected — clicking the selected row again also clears it, but this
-   * gives a visible way out without having to find that row again. */
   onClearSelection?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("active");
@@ -138,6 +131,13 @@ function ActiveOrdersTables({
   const [error, setError] = useState<string | null>(null);
   const [whyTrade, setWhyTrade] = useState<TradeHistoryItem | null>(null);
 
+  const [selectedForEdit, setSelectedForEdit] = useState<Set<number>>(new Set());
+  const [lastSelected, setLastSelected] = useState<number | null>(null);
+  const [groupBySide, setGroupBySide] = useState<boolean>(false);
+  const [editSL, setEditSL] = useState<string>("");
+  const [editTP, setEditTP] = useState<string>("");
+  const [isModifying, setIsModifying] = useState(false);
+
   function skillLabel(ticket: number): string {
     const skill = skillByTicket.get(String(ticket));
     return skill ? (skill.split("/").pop() ?? skill) : "Manual";
@@ -218,6 +218,84 @@ function ActiveOrdersTables({
     }
   }
 
+  function handleSelectRow(ticket: number, e: React.MouseEvent, typeItems: any[]) {
+    e.stopPropagation();
+    const newSet = new Set(selectedForEdit);
+    
+    if (e.shiftKey && lastSelected !== null) {
+      const lastIdx = typeItems.findIndex((i: any) => i.ticket === lastSelected);
+      const currIdx = typeItems.findIndex((i: any) => i.ticket === ticket);
+      if (lastIdx !== -1 && currIdx !== -1) {
+        const start = Math.min(lastIdx, currIdx);
+        const end = Math.max(lastIdx, currIdx);
+        for (let i = start; i <= end; i++) {
+          newSet.add(typeItems[i].ticket);
+        }
+      }
+    } else {
+      if (newSet.has(ticket)) {
+        newSet.delete(ticket);
+      } else {
+        newSet.add(ticket);
+      }
+    }
+    setSelectedForEdit(newSet);
+    setLastSelected(ticket);
+  }
+
+  function handleSelectAll(e: React.ChangeEvent<HTMLInputElement>, typeItems: any[]) {
+    const newSet = new Set(selectedForEdit);
+    if (e.target.checked) {
+      typeItems.forEach((i: any) => newSet.add(i.ticket));
+    } else {
+      typeItems.forEach((i: any) => newSet.delete(i.ticket));
+    }
+    setSelectedForEdit(newSet);
+  }
+
+  async function handleModifySelected() {
+    if (!accountId) return;
+    if (selectedForEdit.size === 0) return;
+    setIsModifying(true);
+    setError(null);
+    try {
+      const slNum = editSL ? Number(editSL) : null;
+      const tpNum = editTP ? Number(editTP) : null;
+      
+      const promises = Array.from(selectedForEdit).map(ticket => {
+        const isPending = pendingOrders.find(o => o.ticket === ticket);
+        if (isPending) {
+           return modifyPendingOrder(accountId, ticket, isPending.price, slNum, tpNum);
+        } else {
+           return modifyPosition(accountId, ticket, slNum, tpNum);
+        }
+      });
+      await Promise.all(promises);
+      refresh();
+      setSelectedForEdit(new Set());
+      setEditSL("");
+      setEditTP("");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "modify failed");
+    } finally {
+      setIsModifying(false);
+    }
+  }
+
+  const groupedPositions = groupBySide 
+    ? [
+        { label: "Buy", items: sortedPositions.filter(p => p.side === "buy") },
+        { label: "Sell", items: sortedPositions.filter(p => p.side === "sell") }
+      ]
+    : [{ label: "", items: sortedPositions }];
+
+  const groupedPending = groupBySide
+    ? [
+        { label: "Buy", items: sortedPending.filter(p => p.side === "buy") },
+        { label: "Sell", items: sortedPending.filter(p => p.side === "sell") }
+      ]
+    : [{ label: "", items: sortedPending }];
+
   if (positions.length === 0 && pendingOrders.length === 0 && !error) {
     return <p className="p-3 text-xs text-ink-muted">No active positions or pending orders.</p>;
   }
@@ -225,6 +303,51 @@ function ActiveOrdersTables({
   return (
     <div className="flex flex-col gap-3 p-3 text-xs">
       {error && <p className="text-err">{error}</p>}
+      
+      <div className="flex items-center gap-4">
+        <label className="flex items-center gap-1 cursor-pointer text-ink-muted">
+          <input 
+            type="checkbox" 
+            checked={groupBySide} 
+            onChange={(e) => setGroupBySide(e.target.checked)} 
+          />
+          Group by side (Buy/Sell)
+        </label>
+      </div>
+
+      {selectedForEdit.size > 0 && (
+        <div className="flex items-center gap-2 p-2 bg-panel rounded border border-line">
+           <span className="font-bold">{selectedForEdit.size} selected</span>
+           <input 
+             type="number" 
+             placeholder="New SL" 
+             className="border border-line bg-transparent px-2 py-1 text-xs outline-none focus:border-accent" 
+             value={editSL} 
+             onChange={e => setEditSL(e.target.value)} 
+           />
+           <input 
+             type="number" 
+             placeholder="New TP" 
+             className="border border-line bg-transparent px-2 py-1 text-xs outline-none focus:border-accent" 
+             value={editTP} 
+             onChange={e => setEditTP(e.target.value)} 
+           />
+           <button 
+             className="bg-accent text-white px-3 py-1 rounded cursor-pointer disabled:opacity-50" 
+             onClick={handleModifySelected} 
+             disabled={isModifying}
+           >
+             Apply to Selected
+           </button>
+           <button 
+             className="ml-auto text-ink-muted hover:text-ink cursor-pointer" 
+             onClick={() => setSelectedForEdit(new Set())}
+           >
+             Cancel
+           </button>
+        </div>
+      )}
+
       {positions.length > 0 && (
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -243,9 +366,16 @@ function ActiveOrdersTables({
               ))}
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px] border-collapse">
+            <table className="w-full min-w-[760px] border-collapse">
               <thead>
                 <tr className="border-b border-line text-ink-muted">
+                  <th className="px-2 py-1 text-left w-8">
+                    <input 
+                      type="checkbox" 
+                      onChange={(e) => handleSelectAll(e, sortedPositions)}
+                      checked={sortedPositions.length > 0 && sortedPositions.every(p => selectedForEdit.has(p.ticket))}
+                    />
+                  </th>
                   <SortTh className="px-2 py-1" label="Symbol" sortKey="symbol" sort={positionSort} onSort={togglePositionSort} />
                   <SortTh className="px-2 py-1" label="Side" sortKey="side" sort={positionSort} onSort={togglePositionSort} />
                   <SortTh className="px-2 py-1"
@@ -287,69 +417,99 @@ function ActiveOrdersTables({
                   <th className="px-2 py-1" />
                 </tr>
               </thead>
-              <tbody>
-                {sortedPositions.map((p) => {
-                  const selected = selectedTicket === p.ticket;
-                  const openTrade = openTradeByTicket.get(String(p.ticket));
-                  return (
-                    <tr
-                      key={p.ticket}
-                      onClick={() => onSelectTicket?.(p.ticket, p.symbol)}
-                      className={`cursor-pointer border-b border-line last:border-0 ${
-                        selected ? "bg-accent/10 ring-1 ring-inset ring-accent" : "hover:bg-panel/40"
-                      }`}
-                      title={`Highlight #${p.ticket} on the chart`}
-                    >
-                      <td className="px-2 py-1">{p.symbol}</td>
-                      <td className={`px-2 py-1 ${p.side === "buy" ? "text-ok" : "text-err"}`}>{p.side}</td>
-                      <td className="px-2 py-1 text-ink-muted" title={skillLabel(p.ticket)}>
-                        {skillLabel(p.ticket)}
-                      </td>
-                      <td className="px-2 py-1 text-right">{p.volume}</td>
-                      <td className="px-2 py-1 text-right">{p.open_price}</td>
-                      <td className="px-2 py-1 text-right">{p.sl ?? "—"}</td>
-                      <td className="px-2 py-1 text-right">{p.tp ?? "—"}</td>
-                      <td className={`px-2 py-1 text-right ${p.profit >= 0 ? "text-ok" : "text-err"}`}>
-                        {p.profit.toFixed(2)}
-                      </td>
-                      <td className="px-2 py-1 text-ink-muted" title={p.open_time}>
-                        {formatIsoTime(p.open_time)}
-                      </td>
-                      <td className="px-2 py-1 text-center">
-                        <DecisionBadge
-                          trade={openTrade ?? { indicators: [], zone: null, pattern: null, structure: [] }}
-                          onClick={openTrade ? () => setWhyTrade(openTrade) : undefined}
+              {groupedPositions.map(group => (
+                <tbody key={group.label || "all"}>
+                  {group.label && group.items.length > 0 && (
+                    <tr className="bg-panel/50 border-b border-line">
+                      <td className="px-2 py-1 text-left w-8">
+                        <input
+                          type="checkbox"
+                          onChange={(e) => handleSelectAll(e, group.items)}
+                          checked={group.items.length > 0 && group.items.every(p => selectedForEdit.has(p.ticket))}
                         />
                       </td>
-                      <td className="px-2 py-1 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleClose(p.ticket);
-                          }}
-                          disabled={busyTicket === p.ticket}
-                          className="cursor-pointer text-ink-muted hover:text-err disabled:opacity-50"
-                          title={`Close #${p.ticket}`}
-                        >
-                          ×
-                        </button>
-                      </td>
+                      <td colSpan={11} className="px-2 py-1 font-bold text-ink">{group.label} Positions</td>
                     </tr>
-                  );
-                })}
-              </tbody>
+                  )}
+                  {group.items.map((p) => {
+                    const selected = selectedTicket === p.ticket;
+                    const isChecked = selectedForEdit.has(p.ticket);
+                    const openTrade = openTradeByTicket.get(String(p.ticket));
+                    return (
+                      <tr
+                        key={p.ticket}
+                        onClick={() => onSelectTicket?.(p.ticket, p.symbol)}
+                        className={`cursor-pointer border-b border-line last:border-0 ${
+                          selected ? "bg-accent/10 ring-1 ring-inset ring-accent" : "hover:bg-panel/40"
+                        } ${isChecked ? "bg-accent/5" : ""}`}
+                        title={`Highlight #${p.ticket} on the chart`}
+                      >
+                        <td className="px-2 py-1">
+                          <input 
+                            type="checkbox" 
+                            checked={isChecked} 
+                            onClick={(e) => handleSelectRow(p.ticket, e, sortedPositions)}
+                            readOnly
+                          />
+                        </td>
+                        <td className="px-2 py-1">{p.symbol}</td>
+                        <td className={`px-2 py-1 ${p.side === "buy" ? "text-ok" : "text-err"}`}>{p.side}</td>
+                        <td className="px-2 py-1 text-ink-muted" title={skillLabel(p.ticket)}>
+                          {skillLabel(p.ticket)}
+                        </td>
+                        <td className="px-2 py-1 text-right">{p.volume}</td>
+                        <td className="px-2 py-1 text-right">{p.open_price}</td>
+                        <td className="px-2 py-1 text-right">{p.sl ?? "—"}</td>
+                        <td className="px-2 py-1 text-right">{p.tp ?? "—"}</td>
+                        <td className={`px-2 py-1 text-right ${p.profit >= 0 ? "text-ok" : "text-err"}`}>
+                          {p.profit.toFixed(2)}
+                        </td>
+                        <td className="px-2 py-1 text-ink-muted" title={p.open_time}>
+                          {formatIsoTime(p.open_time)}
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <DecisionBadge
+                            trade={openTrade ?? { indicators: [], zone: null, pattern: null, structure: [], reason: "", confidence: null }}
+                            onClick={openTrade ? () => setWhyTrade(openTrade) : undefined}
+                          />
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleClose(p.ticket);
+                            }}
+                            disabled={busyTicket === p.ticket}
+                            className="cursor-pointer text-ink-muted hover:text-err disabled:opacity-50"
+                            title={`Close #${p.ticket}`}
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              ))}
             </table>
           </div>
         </div>
       )}
       {whyTrade && <TradeDecisionModal trade={whyTrade} onClose={() => setWhyTrade(null)} />}
       {pendingOrders.length > 0 && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 mt-4">
           <span className="text-ink-muted">Pending orders ({pendingOrders.length})</span>
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[560px] border-collapse">
+            <table className="w-full min-w-[600px] border-collapse">
               <thead>
                 <tr className="border-b border-line text-ink-muted">
+                  <th className="px-2 py-1 text-left w-8">
+                    <input 
+                      type="checkbox" 
+                      onChange={(e) => handleSelectAll(e, sortedPending)}
+                      checked={sortedPending.length > 0 && sortedPending.every(p => selectedForEdit.has(p.ticket))}
+                    />
+                  </th>
                   <SortTh className="px-2 py-1" label="Symbol" sortKey="symbol" sort={pendingSort} onSort={togglePendingSort} />
                   <SortTh className="px-2 py-1" label="Side" sortKey="side" sort={pendingSort} onSort={togglePendingSort} />
                   <SortTh className="px-2 py-1" label="Type" sortKey="order_type" sort={pendingSort} onSort={togglePendingSort} />
@@ -372,42 +532,65 @@ function ActiveOrdersTables({
                   <th className="px-2 py-1" />
                 </tr>
               </thead>
-              <tbody>
-                {sortedPending.map((o) => {
-                  const selected = selectedTicket === o.ticket;
-                  return (
-                    <tr
-                      key={o.ticket}
-                      onClick={() => onSelectTicket?.(o.ticket, o.symbol)}
-                      className={`cursor-pointer border-b border-line last:border-0 ${
-                        selected ? "bg-accent/10 ring-1 ring-inset ring-accent" : "hover:bg-panel/40"
-                      }`}
-                      title={`Highlight #${o.ticket} on the chart`}
-                    >
-                      <td className="px-2 py-1">{o.symbol}</td>
-                      <td className={`px-2 py-1 ${o.side === "buy" ? "text-ok" : "text-err"}`}>{o.side}</td>
-                      <td className="px-2 py-1">{o.order_type}</td>
-                      <td className="px-2 py-1 text-right">{o.volume}</td>
-                      <td className="px-2 py-1 text-right">{o.price}</td>
-                      <td className="px-2 py-1 text-right">{o.sl ?? "—"}</td>
-                      <td className="px-2 py-1 text-right">{o.tp ?? "—"}</td>
-                      <td className="px-2 py-1 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancel(o.ticket);
-                          }}
-                          disabled={busyTicket === o.ticket}
-                          className="cursor-pointer text-ink-muted hover:text-err disabled:opacity-50"
-                          title={`Cancel #${o.ticket}`}
-                        >
-                          ×
-                        </button>
+              {groupedPending.map(group => (
+                <tbody key={group.label || "all"}>
+                  {group.label && group.items.length > 0 && (
+                    <tr className="bg-panel/50 border-b border-line">
+                      <td className="px-2 py-1 text-left w-8">
+                        <input
+                          type="checkbox"
+                          onChange={(e) => handleSelectAll(e, group.items)}
+                          checked={group.items.length > 0 && group.items.every(p => selectedForEdit.has(p.ticket))}
+                        />
                       </td>
+                      <td colSpan={8} className="px-2 py-1 font-bold text-ink">{group.label} Pending Orders</td>
                     </tr>
-                  );
-                })}
-              </tbody>
+                  )}
+                  {group.items.map((o) => {
+                    const selected = selectedTicket === o.ticket;
+                    const isChecked = selectedForEdit.has(o.ticket);
+                    return (
+                      <tr
+                        key={o.ticket}
+                        onClick={() => onSelectTicket?.(o.ticket, o.symbol)}
+                        className={`cursor-pointer border-b border-line last:border-0 ${
+                          selected ? "bg-accent/10 ring-1 ring-inset ring-accent" : "hover:bg-panel/40"
+                        } ${isChecked ? "bg-accent/5" : ""}`}
+                        title={`Highlight #${o.ticket} on the chart`}
+                      >
+                        <td className="px-2 py-1">
+                          <input 
+                            type="checkbox" 
+                            checked={isChecked} 
+                            onClick={(e) => handleSelectRow(o.ticket, e, sortedPending)}
+                            readOnly
+                          />
+                        </td>
+                        <td className="px-2 py-1">{o.symbol}</td>
+                        <td className={`px-2 py-1 ${o.side === "buy" ? "text-ok" : "text-err"}`}>{o.side}</td>
+                        <td className="px-2 py-1">{o.order_type}</td>
+                        <td className="px-2 py-1 text-right">{o.volume}</td>
+                        <td className="px-2 py-1 text-right">{o.price}</td>
+                        <td className="px-2 py-1 text-right">{o.sl ?? "—"}</td>
+                        <td className="px-2 py-1 text-right">{o.tp ?? "—"}</td>
+                        <td className="px-2 py-1 text-right">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleCancel(o.ticket);
+                            }}
+                            disabled={busyTicket === o.ticket}
+                            className="cursor-pointer text-ink-muted hover:text-err disabled:opacity-50"
+                            title={`Cancel #${o.ticket}`}
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              ))}
             </table>
           </div>
         </div>

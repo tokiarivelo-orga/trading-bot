@@ -1,6 +1,8 @@
 import {
   Activity,
   AlertTriangle,
+  Calendar,
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronsRight,
@@ -25,6 +27,7 @@ import { memo, type Ref } from 'react';
 import type { Candle } from '@/shared/api/client';
 import { REQUIRED_ANCHORS, TIMEFRAMES } from './chartFormat';
 import type { DrawingToolType, GapRepairSummary } from './types';
+import type { ImpactFilter } from './useChartUIToggles';
 
 export interface ChartToolbarProps {
   symbol: string;
@@ -71,10 +74,12 @@ export interface ChartToolbarProps {
   onToggleSpreadLine: () => void;
   showVolume: boolean;
   onToggleVolume: () => void;
-  showTradeLabels: boolean;
-  onToggleTradeLabels: () => void;
-  showTradeMarkers: boolean;
-  onToggleTradeMarkers: () => void;
+  showTradeBadges: boolean;
+  onToggleTradeBadges: () => void;
+  showEconomicCalendar: boolean;
+  onToggleEconomicCalendar: () => void;
+  economicCalendarImpactFilter: ImpactFilter;
+  onSelectEconomicCalendarImpactFilter: (filter: ImpactFilter) => void;
   orderLineVisible: boolean;
   onToggleOrderLinesVisible: () => void;
   showOrderLineSettings: boolean;
@@ -164,10 +169,12 @@ export const ChartToolbar = memo(function ChartToolbar({
   onToggleSpreadLine,
   showVolume,
   onToggleVolume,
-  showTradeLabels,
-  onToggleTradeLabels,
-  showTradeMarkers,
-  onToggleTradeMarkers,
+  showTradeBadges,
+  onToggleTradeBadges,
+  showEconomicCalendar,
+  onToggleEconomicCalendar,
+  economicCalendarImpactFilter,
+  onSelectEconomicCalendarImpactFilter,
   orderLineVisible,
   onToggleOrderLinesVisible,
   showOrderLineSettings,
@@ -466,32 +473,18 @@ export const ChartToolbar = memo(function ChartToolbar({
                 {showVolume && <Check size={12} className='text-accent' />}
               </button>
 
-              {/* Trade Labels Toggle */}
+              {/* Trade Badges Toggle */}
               <button
                 type='button'
                 className='flex w-full cursor-pointer items-center justify-between rounded px-2.5 py-1.5 text-xs text-ink-muted hover:bg-line/50 hover:text-ink transition-colors'
-                onClick={onToggleTradeLabels}
-                title='Show/hide the BUY/SELL text under trade markers — arrows stay visible either way'
+                onClick={onToggleTradeBadges}
+                title='Show/hide the circular trade badges'
               >
                 <span className='flex items-center gap-2'>
-                  {showTradeLabels ? <Eye size={13} className='text-accent' /> : <EyeOff size={13} />}
-                  <span>Trade labels (BUY/SELL)</span>
+                  {showTradeBadges ? <Eye size={13} className='text-accent' /> : <EyeOff size={13} />}
+                  <span>Trade badges</span>
                 </span>
-                {showTradeLabels && <Check size={12} className='text-accent' />}
-              </button>
-
-              {/* Trade Markers (arrows) Toggle */}
-              <button
-                type='button'
-                className='flex w-full cursor-pointer items-center justify-between rounded px-2.5 py-1.5 text-xs text-ink-muted hover:bg-line/50 hover:text-ink transition-colors'
-                onClick={onToggleTradeMarkers}
-                title='Show/hide the BUY/SELL arrows themselves — independent of the text label toggle'
-              >
-                <span className='flex items-center gap-2'>
-                  {showTradeMarkers ? <Eye size={13} className='text-accent' /> : <EyeOff size={13} />}
-                  <span>Trade arrows (BUY/SELL)</span>
-                </span>
-                {showTradeMarkers && <Check size={12} className='text-accent' />}
+                {showTradeBadges && <Check size={12} className='text-accent' />}
               </button>
 
               {/* Period Separators Toggle */}
@@ -506,6 +499,40 @@ export const ChartToolbar = memo(function ChartToolbar({
                 </span>
                 {showSeparators && <Check size={12} className='text-accent' />}
               </button>
+
+              {/* Economic Calendar Toggle */}
+              <button
+                type='button'
+                className='flex w-full cursor-pointer items-center justify-between rounded px-2.5 py-1.5 text-xs text-ink-muted hover:bg-line/50 hover:text-ink transition-colors'
+                onClick={onToggleEconomicCalendar}
+                title='Show/hide upcoming economic calendar events'
+              >
+                <span className='flex items-center gap-2'>
+                  <Calendar size={13} className={showEconomicCalendar ? 'text-accent' : ''} />
+                  <span>Economic calendar</span>
+                </span>
+                {showEconomicCalendar && <Check size={12} className='text-accent' />}
+              </button>
+              
+              {/* Economic Calendar Impact Filter */}
+              <div className='flex items-center justify-between rounded px-2.5 py-1.5 text-xs text-ink-muted hover:bg-line/50 transition-colors'>
+                <div className='flex items-center gap-2 flex-1'>
+                  <AlertTriangle size={13} />
+                  <span>Calendar impact</span>
+                </div>
+                <div className='flex items-center gap-1'>
+                  <select
+                    className='bg-bg/50 border border-line rounded px-1 py-0.5 text-[10px] text-ink outline-none hover:border-line/80'
+                    value={economicCalendarImpactFilter}
+                    onChange={(e) => onSelectEconomicCalendarImpactFilter(e.target.value as ImpactFilter)}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <option value='ALL'>All</option>
+                    <option value='high'>High</option>
+                    <option value='medium'>Medium+</option>
+                  </select>
+                </div>
+              </div>
 
               {/* Order Lines Toggle & Gear */}
               <div className='flex items-center justify-between rounded px-2.5 py-1.5 text-xs text-ink-muted hover:bg-line/50 transition-colors'>

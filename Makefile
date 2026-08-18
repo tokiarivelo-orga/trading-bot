@@ -35,8 +35,13 @@ BACKEND_PORT  ?= 8000
 FRONTEND_PORT := $(shell [ -f .env ] && grep -E '^TB_FRONTEND_PORT=' .env | cut -d= -f2-)
 FRONTEND_PORT := $(if $(FRONTEND_PORT),$(FRONTEND_PORT),3000)
 
-# Wine prefix dedicated to the MT5 terminal + Windows Python (see gateway/README.md)
-WINEPREFIX ?= $(HOME)/.mt5
+# Wine prefix dedicated to the MT5 terminal + Windows Python (see
+# gateway/README.md). Defaults to TB_WINEPREFIX from .env (falls back to
+# $(HOME)/.mt5 if unset/no .env yet) — since the prefix location varies per
+# machine, edit .env once instead of retyping the override every time. Still
+# overridable per-invocation: make dev-gateway WINEPREFIX=/path/to/prefix
+WINEPREFIX := $(shell [ -f .env ] && grep -E '^TB_WINEPREFIX=' .env | cut -d= -f2-)
+WINEPREFIX := $(if $(WINEPREFIX),$(WINEPREFIX),$(HOME)/.mt5)
 
 # Silences Wine's "fixme:" stub-implementation noise (harddisk_ioctl,
 # cryptasn CryptDecodeObjectEx, etc.) that floods the console once several
@@ -133,7 +138,10 @@ dev-gateway: ## Run one account's MT5 gateway under Wine: make dev-gateway ACCOU
 	@mkdir -p $(GATEWAY_DIR)/run
 	@eval "$$(cd $(BACKEND_DIR) && $(UV) run python -m scripts.print_account_gateway_env $(ACCOUNT))" && \
 	SECRET=$$(grep -E "^$${TB_RESOLVED_GATEWAY_SECRET_ENV}=" .env 2>/dev/null | cut -d= -f2-) && \
-	if [ -n "$$TB_RESOLVED_TERMINAL_SUBPATH" ]; then \
+	if [ -n "$$TB_RESOLVED_TERMINAL_PATH" ]; then \
+		TERM_PATH="$$TB_RESOLVED_TERMINAL_PATH"; \
+		PGREP_ARGS="-f $$TERM_PATH"; \
+	elif [ -n "$$TB_RESOLVED_TERMINAL_SUBPATH" ]; then \
 		TERM_PATH="$(WINEPREFIX)/drive_c/$$TB_RESOLVED_TERMINAL_SUBPATH"; \
 		PGREP_ARGS="-f $$TERM_PATH"; \
 	else \
@@ -146,7 +154,7 @@ dev-gateway: ## Run one account's MT5 gateway under Wine: make dev-gateway ACCOU
 		sleep 10; \
 	fi; \
 	echo "starting gateway for account '$$TB_RESOLVED_ACCOUNT_ID' -> http://$$TB_RESOLVED_GATEWAY_HOST:$$TB_RESOLVED_GATEWAY_PORT (pid file: $(GATEWAY_DIR)/run/$$TB_RESOLVED_ACCOUNT_ID.pid)"; \
-	( cd $(GATEWAY_DIR) && WINEPREFIX=$(WINEPREFIX) WINEDEBUG=$(WINEDEBUG) GATEWAY_SHARED_SECRET=$$SECRET GATEWAY_HOST=$$TB_RESOLVED_GATEWAY_HOST GATEWAY_PORT=$$TB_RESOLVED_GATEWAY_PORT MT5_TERMINAL_SUBPATH=$$TB_RESOLVED_TERMINAL_SUBPATH wine $(WINE_PYTHON) run_gateway.py & \
+	( cd $(GATEWAY_DIR) && WINEPREFIX=$(WINEPREFIX) WINEDEBUG=$(WINEDEBUG) GATEWAY_SHARED_SECRET=$$SECRET GATEWAY_HOST=$$TB_RESOLVED_GATEWAY_HOST GATEWAY_PORT=$$TB_RESOLVED_GATEWAY_PORT MT5_TERMINAL_PATH=$$TB_RESOLVED_TERMINAL_PATH MT5_TERMINAL_SUBPATH=$$TB_RESOLVED_TERMINAL_SUBPATH wine $(WINE_PYTHON) run_gateway.py & \
 	  echo $$! > run/$$TB_RESOLVED_ACCOUNT_ID.pid; \
 	  wait $$! )
 
@@ -281,9 +289,16 @@ db-history: ## Show migration history and current revision
 	cd $(BACKEND_DIR) && $(UV) run alembic history && $(UV) run alembic current
 
 # ─── Docker (Linux services only — backend + frontend; gateway excluded) ─────
+#
+# Two compose files: docker-compose.yml (dev — builds from source, live
+# pnpm dev server) and docker-compose.prod.yml (production — pulls
+# published Docker Hub images; see docker-publish.yml). The *-prod targets
+# below are the same commands pointed at the prod file with PROD_ARGS=-d.
+
+PROD_COMPOSE := docker compose -f docker-compose.prod.yml
 
 .PHONY: docker-up
-docker-up: ## Start the dev stack in the background (docker compose up -d)
+docker-up: ## Start the dev stack in the background (docker compose up -d --build)
 	docker compose up -d --build
 
 .PHONY: docker-down
@@ -291,12 +306,29 @@ docker-down: ## Stop the dev stack
 	docker compose down
 
 .PHONY: docker-logs
-docker-logs: ## Tail logs from all services
+docker-logs: ## Tail logs from all dev-stack services
 	docker compose logs -f --tail=100
 
 .PHONY: docker-ps
-docker-ps: ## Show service status
+docker-ps: ## Show dev-stack service status
 	docker compose ps
+
+.PHONY: docker-up-prod
+docker-up-prod: ## Start the prod stack (pulled backend+frontend images) in the background: make docker-up-prod [DOCKERHUB_NAMESPACE=you] [IMAGE_TAG=v0.1.0]
+	$(PROD_COMPOSE) pull
+	$(PROD_COMPOSE) up -d
+
+.PHONY: docker-down-prod
+docker-down-prod: ## Stop the prod stack
+	$(PROD_COMPOSE) down
+
+.PHONY: docker-logs-prod
+docker-logs-prod: ## Tail logs from all prod-stack services
+	$(PROD_COMPOSE) logs -f --tail=100
+
+.PHONY: docker-ps-prod
+docker-ps-prod: ## Show prod-stack service status
+	$(PROD_COMPOSE) ps
 
 # ─── Dependency maintenance (rule: always latest stable — see CLAUDE.md) ─────
 

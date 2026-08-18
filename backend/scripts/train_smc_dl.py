@@ -45,7 +45,7 @@ def _load_candles(db_path: str, symbol: str) -> dict[str, pd.DataFrame]:
         query = (
             "SELECT time, open, high, low, close, tick_volume "
             "FROM candles "
-            f"WHERE symbol=? AND timeframe=? "
+            "WHERE symbol=? AND timeframe=? "
             "ORDER BY time"
         )
         df = pd.read_sql_query(query, conn, params=(symbol, tf))
@@ -73,6 +73,12 @@ def train(
 
     symbol = os.environ.get("SYMBOL", "XAUUSD")
     model_name = "smc_dl_m5" if symbol == "XAUUSD" else "smc_dl_m5_step200"
+
+    # Training hyper-params: reduced dropout for smoother convergence,
+    # more epochs with early stopping so we don't under-train.
+    dropout = 0.10
+    epochs = 60
+    patience = 10  # early-stopping patience (epochs without val improvement)
 
     print(f"Loading candle data for {symbol}...")
     candles = _load_candles(db, symbol)
@@ -211,11 +217,29 @@ def train(
             module.p = dropout
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-5
+    )
     bce = nn.BCELoss(reduction='none')
-    ce = nn.CrossEntropyLoss(reduction='none')
+
+    # Compute class weights for direction head to handle any imbalance.
+    # Classes: 0=bearish, 1=neutral, 2=bullish.
+    dir_counts = np.bincount(y_train_dir, minlength=3).astype(np.float32)
+    dir_weights = torch.FloatTensor(
+        np.where(dir_counts > 0, dir_counts.sum() / (3 * dir_counts), 1.0)
+    )
+    ce = nn.CrossEntropyLoss(weight=dir_weights, reduction='none')
     mse = nn.MSELoss(reduction='none')
 
-    print(f"Training: {epochs} epochs, hidden={hidden_dim}, lr={lr}, dropout={dropout}")
+    print(f"Training: up to {epochs} epochs (early-stop patience={patience}), "
+          f"hidden={hidden_dim}, lr={lr}, dropout={dropout}")
+    print(f"Direction class weights: bear={dir_weights[0]:.3f} neutral={dir_weights[1]:.3f} "
+          f"bull={dir_weights[2]:.3f}")
+
+    best_val_loss = float('inf')
+    best_state: dict | None = None
+    stale = 0
+
     for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0.0
@@ -240,23 +264,40 @@ def train(
                 l_dir = ce(vdir, y_dir_v)
                 l_risk = mse(vrisk, y_risk_v)
                 val_loss = (l_tp.mean() + l_dir.mean() + l_risk.mean()).item()
-                
-                # Accuracy tracking on live dataset subset
+                scheduler.step(val_loss)
+
+                # Overall direction accuracy on full val set
+                preds_all = vdir.argmax(dim=1)
+                acc_all = (preds_all == y_dir_v).float().mean().item()
+                val_str = f" | Val: {val_loss:.4f} | DirAcc: {acc_all:.2%}"
+
+                # Live subset accuracy if available
                 if l_val.any():
-                    live_mask = l_val
-                    vdir_live = vdir[live_mask]
-                    y_dir_live = y_dir_v[live_mask]
+                    vdir_live = vdir[l_val]
+                    y_dir_live = y_dir_v[l_val]
                     if len(vdir_live) > 0:
-                        preds = vdir_live.argmax(dim=1)
-                        acc = (preds == y_dir_live).float().mean().item()
-                        val_str = f" | Val Loss: {val_loss:.4f} | Live Acc: {acc:.2%}"
-                    else:
-                        val_str = f" | Val Loss: {val_loss:.4f}"
+                        live_acc = (vdir_live.argmax(dim=1) == y_dir_live).float().mean().item()
+                        val_str += f" | LiveAcc: {live_acc:.2%}"
+
+                # Early stopping
+                if val_loss < best_val_loss - 1e-4:
+                    best_val_loss = val_loss
+                    best_state = {k: v.clone() for k, v in model.state_dict().items()}
+                    stale = 0
                 else:
-                    val_str = f" | Val Loss: {val_loss:.4f}"
+                    stale += 1
 
         if epoch % 5 == 0 or epoch == 1:
-            print(f"  Epoch {epoch:3d}/{epochs} | Train Loss: {avg_train:.4f}{val_str}")
+            print(f"  Epoch {epoch:3d}/{epochs} | Train: {avg_train:.4f}{val_str}")
+
+        if stale >= patience:
+            print(f"  Early stop at epoch {epoch} (no improvement for {patience} epochs)")
+            break
+
+    # Restore best weights
+    if best_state is not None:
+        model.load_state_dict(best_state)
+        print(f"  Restored best weights (val_loss={best_val_loss:.4f})")
 
     # Save model + scaler
     out_dir = os.path.join(os.path.dirname(__file__), "..", "data", "ml_models")

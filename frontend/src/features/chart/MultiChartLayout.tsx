@@ -175,8 +175,7 @@ export function MultiChartLayout(props: ChartPanelProps) {
           prev.showSeparators === tp.showSeparators &&
           prev.showSpreadLine === tp.showSpreadLine &&
           prev.showVolume === tp.showVolume &&
-          prev.showTradeLabels === tp.showTradeLabels &&
-          prev.showTradeMarkers === tp.showTradeMarkers &&
+          prev.showTradeBadges === tp.showTradeBadges &&
           prev.orderLineVisible === tp.orderLineVisible &&
           prev.showOrderLineSettings === tp.showOrderLineSettings &&
           (prev.backtestReportId ?? null) === (tp.backtestReportId ?? null) &&
@@ -322,8 +321,7 @@ export function MultiChartLayout(props: ChartPanelProps) {
           onToggleSeparators={() => windowToolbarsRef.current[selectedWindow]?.onToggleSeparators()}
           onToggleSpreadLine={() => windowToolbarsRef.current[selectedWindow]?.onToggleSpreadLine()}
           onToggleVolume={() => windowToolbarsRef.current[selectedWindow]?.onToggleVolume()}
-          onToggleTradeLabels={() => windowToolbarsRef.current[selectedWindow]?.onToggleTradeLabels()}
-          onToggleTradeMarkers={() => windowToolbarsRef.current[selectedWindow]?.onToggleTradeMarkers()}
+          onToggleTradeBadges={() => windowToolbarsRef.current[selectedWindow]?.onToggleTradeBadges()}
           onToggleOrderLinesVisible={() => windowToolbarsRef.current[selectedWindow]?.onToggleOrderLinesVisible()}
           onToggleOrderLineSettings={() => windowToolbarsRef.current[selectedWindow]?.onToggleOrderLineSettings()}
           onSessionReplayToggle={() => windowToolbarsRef.current[selectedWindow]?.onSessionReplayToggle()}

@@ -40,6 +40,33 @@ The gateway requires a running MT5 terminal under Wine (development) or on a
 Windows VPS (live trading). See [`gateway/README.md`](gateway/README.md) for
 full setup instructions.
 
+## Installing on another machine
+
+**Full installation guide:** see [`INSTALL.md`](INSTALL.md) for the
+complete, standalone walkthrough (requirements, every installer prompt,
+Docker, uninstalling, troubleshooting, FAQ). The summary below is the
+short version.
+
+Two install paths, depending on where the MT5 gateway runs:
+
+- **CLI installer** — full stack including the gateway, any OS. Sets up a
+  Windows/Wine (or Windows VPS) MT5 terminal alongside backend + frontend.
+  See `installer/install.py` (built in a separate track).
+- **Docker (backend + frontend only)** — for when the MT5 gateway already
+  runs elsewhere, e.g. a separate Windows VPS reached over the network via
+  `TB_GATEWAY_URL` in `.env`. Pulls prebuilt images from Docker Hub instead
+  of building from source:
+  ```bash
+  cp .env.example .env   # then set TB_GATEWAY_URL to your gateway
+  docker compose -f docker-compose.prod.yml up -d
+  # or: make docker-up-prod
+  ```
+  <!-- TODO: images publish under the placeholder namespace "tradingbot" —
+  swap for the real Docker Hub username/org once confirmed. --> Published by
+  [`.github/workflows/docker-publish.yml`](.github/workflows/docker-publish.yml)
+  on a version tag push. The gateway itself is deliberately not
+  containerized — see `gateway/README.md`.
+
 **Backend API docs** (once `make dev-backend` is running): interactive Swagger
 UI at <http://localhost:8000/docs>, ReDoc at <http://localhost:8000/redoc>, raw
 schema at <http://localhost:8000/openapi.json> (or `make openapi`). Every

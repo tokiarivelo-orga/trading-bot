@@ -1,0 +1,7 @@
+name: normal/step index 200/smc_dl_m5_step200
+symbol: Step Index 200
+strategy: smc_dl_m5_step200
+risk_multiplier: 1.0
+sessions: []
+param_overrides: {}
+htf_veto_override: null

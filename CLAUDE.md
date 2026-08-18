@@ -96,6 +96,26 @@ Read `IMPLEMENTATION_PLAN.md` for the full design. These rules are binding.
   used by more than one file in a feature live in that feature's `types.ts`,
   not re-exported from a component file.
 
+## Installer & distribution
+- `installer/install.py` is a stdlib-only setup wizard that makes this repo
+  installable on a machine other than a developer's own checkout — picks
+  install dir, MT5 terminal location, paper/live per account, and (on
+  Linux) registers systemd `--user` autostart services; on Windows it
+  points at `installer/services/windows/install_services.ps1` for the same.
+  `docker-compose.prod.yml` + `.github/workflows/docker-publish.yml` are the
+  complementary Docker Hub-pull path for backend+frontend only (the MT5
+  gateway is deliberately never containerized — see `gateway/README.md`).
+- Any new required `.env` var, `configs/accounts.yaml` field, or service
+  dependency (a new process the stack needs running) must be added to
+  `installer/wizard.py` + the relevant file(s) under `installer/services/`
+  in the **same change** that introduces it — `.env.example` alone is not
+  enough, since the installer is what actually provisions a fresh machine.
+  If the new thing also needs to reach a Docker image, update
+  `docker-compose.prod.yml` and the two Dockerfiles too.
+- Never put MT5 broker credentials (login/password/server) anywhere in
+  `installer/`, `.env`, or a Docker image/compose file — they stay entirely
+  on the existing app UI → OS keyring flow.
+
 ## Conventions
 - Python 3.12, `uv` for dependency management, `ruff` for lint+format.
 - Frontend dependency management via `pnpm` only.

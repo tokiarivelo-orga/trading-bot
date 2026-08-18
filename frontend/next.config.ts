@@ -6,6 +6,11 @@ import type { NextConfig } from "next";
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // Standalone output traces the minimal set of files/deps a production
+  // server needs into .next/standalone (incl. a self-contained server.js) —
+  // required for the lean multi-stage `frontend/Dockerfile` production
+  // image; unused by `pnpm dev` / `make dev-frontend`.
+  output: "standalone",
   async rewrites() {
     return [
       {

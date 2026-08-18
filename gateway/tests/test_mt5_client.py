@@ -5,6 +5,25 @@ from gateway.mt5_client import Mt5Error, _retcode_reason
 from tests.conftest import FakePendingOrder, FakePosition
 
 
+def test_windows_terminal_path_converts_wine_host_path():
+    raw = "/home/dev/.mt5/drive_c/Program Files/MetaTrader 5/terminal64.exe"
+    assert (
+        mt5_client._windows_terminal_path(raw)
+        == "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+    )
+
+
+def test_windows_terminal_path_converts_second_account_prefix():
+    raw = "/home/dev/.mt5/drive_c/MT5-demo-1/terminal64.exe"
+    assert mt5_client._windows_terminal_path(raw) == "C:\\MT5-demo-1\\terminal64.exe"
+
+
+def test_windows_terminal_path_passes_native_windows_path_through():
+    # No "drive_c" segment -- this is already a real Windows install, not Wine.
+    raw = "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+    assert mt5_client._windows_terminal_path(raw) == raw
+
+
 def test_known_retcode_is_decoded():
     assert "autotrading disabled in the terminal" in _retcode_reason(10027)
 

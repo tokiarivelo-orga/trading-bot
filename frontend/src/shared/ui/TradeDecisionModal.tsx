@@ -99,14 +99,48 @@ export function TradeDecisionModal({
             Why #{trade.id} — {trade.symbol}{" "}
             <span className={trade.side === "buy" ? "text-ok" : "text-err"}>{trade.side}</span>
           </h3>
-          <button
-            type="button"
-            className="cursor-pointer text-ink-muted hover:text-ink"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className="flex cursor-pointer items-center gap-1 rounded border border-line px-2 py-1 text-xs text-ink-muted hover:text-ink"
+              onClick={() => {
+                const dataStr =
+                  "data:text/json;charset=utf-8," +
+                  encodeURIComponent(JSON.stringify(trade, null, 2));
+                const node = document.createElement("a");
+                node.setAttribute("href", dataStr);
+                node.setAttribute("download", `trade_${trade.id}_metadata.json`);
+                document.body.appendChild(node);
+                node.click();
+                node.remove();
+              }}
+              title="Download all metadata for analysis"
+            >
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              Download JSON
+            </button>
+            <button
+              type="button"
+              className="cursor-pointer text-ink-muted hover:text-ink"
+              onClick={onClose}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="mb-3">

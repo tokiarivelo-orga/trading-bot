@@ -1,0 +1,18 @@
+# Keeps the build context small and prevents a host-built .venv/ (which can
+# contain host-specific paths/arches) or local data/ (sqlite DB, journals)
+# from ever being baked into the image. Runtime data/configs are compose-
+# level bind mounts (see docker-compose.prod.yml) — never image content.
+.venv/
+data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.git/
+.gitignore
+*.db
+*.sqlite3
+.env
+.env.*
+*.log

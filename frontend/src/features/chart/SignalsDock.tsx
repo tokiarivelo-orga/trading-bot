@@ -57,7 +57,7 @@ function toTradeHistoryItem(
     // BacktestTrade doesn't report indicator readings; only live/journaled
     // trades (TradeHistoryItem from the backend) carry that field.
     indicators: [],
-  };
+  } as unknown as TradeHistoryItem;
 }
 
 export function SignalsDock({

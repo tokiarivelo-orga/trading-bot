@@ -67,6 +67,7 @@ from src.strategies.generated.breakout_v2 import BreakoutV2
 from src.strategies.generated.mean_reversion_v1 import MeanReversionV1
 from src.strategies.generated.trend_structure_v1 import TrendStructureV1
 from src.strategies.generated.trend_structure_v2 import TrendStructureV2
+
 try:
     from src.strategies.generated.smc_dl_m5_v1 import SmcDlM5V1
 except ImportError:
@@ -561,7 +562,7 @@ def _default_registry(database_url: str) -> StrategyRegistry:
             logger.warning("SmcDlM5V1 skipped (model weights missing or torch error)")
             
     try:
-        from src.strategies.generated.smc_dl_m5_step200 import SmcDlM5Step200
+        from src.strategies.generated.smc_dl_m5_step200_v1 import SmcDlM5Step200
         smc_dl_step200 = SmcDlM5Step200()
         registry.register(smc_dl_step200.spec.name, smc_dl_step200)
     except Exception:

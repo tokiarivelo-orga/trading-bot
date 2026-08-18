@@ -5,6 +5,30 @@ end. For MT5 gateway internals see `gateway/README.md` — this file is the
 "do these steps in this order" version, tailored to the errors you'll hit if
 you skip one.
 
+## Installing on a different machine?
+
+Everything below is the manual, step-by-step path for developing on this
+repo directly. If you're setting this up on a machine you're not going to
+hack on the code from, there are two faster paths (see the root
+`README.md`'s "Installing on another machine" for the full comparison):
+
+- **`installer/install.py`** — an interactive wizard that automates steps
+  1–6 below (dependencies, `.env`, Wine + MT5 terminal on Linux, autostart
+  services). Works on both Windows and Linux, lets you pick where the MT5
+  terminal lives and which accounts run paper vs. live.
+- **Docker** (`docker compose -f docker-compose.prod.yml up -d`) — backend +
+  frontend only, for when the MT5 gateway already runs elsewhere (e.g. a
+  separate Windows VPS). Steps 3–4 below (Wine/terminal) don't apply to this
+  path.
+
+Keep reading if you're setting up a dev checkout by hand, or want to
+understand what those two paths actually do under the hood.
+
+## Dev setup (contributors)
+
+The manual walkthrough — same steps `installer/install.py` runs for you,
+spelled out one at a time.
+
 ## Do I need an MT5 login and password?
 
 **Yes.** You need a broker **demo account**: a login number, password, and
