@@ -1,18 +1,22 @@
-"""Unit tests for `xauusd_snd_qm_structure_m1_v5.py` (patched, VALIDATED —
+"""Unit tests for `xauusd_snd_qm_structure_m1_v6.py` (patched, VALIDATED —
 not yet active) — XAUUSD S&D V1/V2 + Quasimodo + market-structure strategy,
 M1 Scalping preset. Zone timeframe is M5, resampled in-strategy from M1
 (5 M1 bars per bucket).
 
-v5 adds two live-safety gates over the active v4 (see that file's module
+v5 (now active) added two live-safety gates over v4 (see that file's module
 docstring for the 2026-08-17 over-trading incident this fixes): a hard
 `ctx.own_position is not None` guard, and a `fresh_touch` requirement so a
-zone only signals on the entry-TF bar price first enters it."""
+zone only signals on the entry-TF bar price first enters it. v6 adds a
+pattern/volatility/session entry filter validated OOS on live M1 trades
+(see this file's module docstring for the numbers) — deliberately not an
+hour-of-day gate, which overfit catastrophically on the same data."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -23,17 +27,19 @@ from src.strategies.domain.models import (
     StructureLabel,
     ZoneKind,
 )
-from src.strategies.generated.xauusd_snd_qm_structure_m1_v5 import (
+from src.strategies.generated.xauusd_snd_qm_structure_m1_v6 import (
     XauusdSndQmStructureM1,
     _atr,
     _detect_quasimodo_zones,
     _detect_structure,
     _detect_zones_v1,
     _resample,
+    _session_ok,
+    _volatility_ok,
 )
 from src.strategies.sandbox import validate_and_load
 
-STRATEGY_PATH = Path("src/strategies/generated/xauusd_snd_qm_structure_m1_v5.py")
+STRATEGY_PATH = Path("src/strategies/generated/xauusd_snd_qm_structure_m1_v6.py")
 
 START = datetime(2026, 1, 1, tzinfo=UTC)
 STEP = timedelta(minutes=1)
@@ -270,3 +276,59 @@ def test_fresh_touch_gate_only_signals_on_first_touch() -> None:
         symbol="XAUUSD", candles={"M1": pd.DataFrame(bars)}, spread_points=SPREAD_POINTS
     )
     assert instance.evaluate(second_ctx) is None
+
+
+def test_session_ok_matches_engine_regime_boundaries() -> None:
+    """Same UTC hour boundaries as engine/domain/regime.py's session_for()
+    with its default RegimeConfig: asian/london/new_york pass, the
+    London/New York overlap (12-16) and the 21-22 off-session gap block."""
+    for hour in (0, 1, 6, 7, 10, 11, 16, 18, 20, 22, 23):
+        assert _session_ok(hour), f"hour {hour} should be allowed"
+    for hour in (12, 13, 14, 15, 21):
+        assert not _session_ok(hour), f"hour {hour} should be blocked"
+
+
+def test_volatility_ok_blocks_high_and_extreme_regime() -> None:
+    """Same bands as engine/domain/volatility.py's latest_volatility_regime:
+    a current reading far above its trailing 100-bar window (HIGH/EXTREME
+    percentile) is blocked; a reading in the middle of a flat window
+    (NORMAL) passes."""
+    flat_window = pd.Series([1.0] * 101)
+    assert _volatility_ok(flat_window)  # tie-aware rank -> ~50th percentile
+
+    spiking = pd.Series([1.0] * 100 + [10.0])  # latest bar far above history
+    assert not _volatility_ok(spiking)
+
+    low_vol = pd.Series(list(np.linspace(0.5, 1.5, 100)) + [0.1])  # below every prior reading
+    assert _volatility_ok(low_vol)  # LOW is kept, not just NORMAL
+
+    too_short = pd.Series([1.0])
+    assert _volatility_ok(too_short)  # not enough history -> never veto on ignorance
+
+
+def test_pattern_filter_rejects_dbd_supply_zone() -> None:
+    """A DBD supply zone (drop-base-drop leg-in, rally leg-out kept out of
+    _KEPT_PATTERNS = {RBR, RBD, QM_BULL}) must not signal even when it is a
+    fresh, unbroken, freshly-touched zone — the same shape
+    test_buy_signals_on_rbr_zone_retest uses, mirrored to the sell side."""
+    instance, errors = validate_and_load(STRATEGY_PATH.read_text())
+    assert errors == ()
+    assert instance is not None
+
+    bars: list[dict] = []
+    for _ in range(20):
+        _bucket(bars, 100.0, 100.6, 99.4, 100.4)
+    _bucket(bars, 100.4, 100.5, 99.6, 99.8)  # leg-in candle 1 (drop, body 0.6-0.8)
+    _bucket(bars, 99.8, 99.9, 98.8, 99.0)  # leg-in candle 2 (drop, run total 1.6)
+    _bucket(bars, 99.0, 99.2, 98.9, 99.05)  # weak base -> zone band [98.9, 99.2]
+    _bucket(bars, 99.05, 99.15, 98.25, 98.35)  # leg-out candle 1 (confirms: 98.35 < 98.9)
+    _bucket(bars, 98.35, 98.45, 97.45, 97.55)  # leg-out candle 2 (run total 1.6)
+    for _ in range(3):
+        bars.append(_bar(len(bars), 97.5, 97.6, 97.4, 97.5))
+    bars.append(_bar(len(bars), 99.1, 99.15, 99.0, 99.05))  # retest, fresh touch
+
+    ctx = MarketContext(
+        symbol="XAUUSD", candles={"M1": pd.DataFrame(bars)}, spread_points=SPREAD_POINTS
+    )
+    result = instance.evaluate(ctx)
+    assert result is None, "DBD is not in _KEPT_PATTERNS and must be vetoed"

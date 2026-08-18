@@ -109,11 +109,24 @@ per_bot:
 
   # ── M1 bots: fixed 0.3R target (see the block above) ──
   # The give-back trail stays on underneath; whichever protects more wins.
+  #
+  # RE-VALIDATED 2026-08-18 (scripts/eval_giveback_per_bot.py +
+  # eval_fixed_target_by_tf.py, fresh chronological 60/40 split, 7,995 M1
+  # trades vs 1,549 when this policy shipped): the M1 fleet's baseline OOS
+  # edge has flipped from -375.8R (PF 0.60, why this policy exists) to
+  # +386.6R (PF 1.22) — the apex family's growth plus the 2026-08-17
+  # overtrading fix. Capping winners at 0.2-0.3R now throws away upside a
+  # bleeding fleet never had. Per-bot OOS delta for the whole policy
+  # (give-back trail + fixed target together): qm_structure_m1 -99.7R
+  # (saves only 95.4R DD), qm_structure_fixed_m1 -196.4R (saves only 67.0R
+  # DD), apex_trendguard_m1 -45.0R (saves only 5.1R DD) — all three now cost
+  # more than the drawdown protection is worth. Disabled below. Re-check
+  # periodically with the same scripts — this reversed once already.
   xauusd_snd_qm_structure_m1:
-    fixed_target_r: 0.3
+    enabled: false
   xauusd_snd_qm_structure_fixed_m1:
-    fixed_target_r: 0.3
+    enabled: false
   xauusd_snd_apex_trendguard_m1:
-    fixed_target_r: 0.3
+    enabled: false
   xauusd_snd_adaptive_m1:
     fixed_target_r: 0.3
