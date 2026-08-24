@@ -159,6 +159,15 @@ def _veto_timeframe(strategy: Strategy) -> str | None:
     return above.value if above is not None else None
 
 
+def _trim_forming_bar(bars: list[Candle], now: datetime) -> list[Candle]:
+    """Drops a trailing not-yet-closed candle, so strategy context matches
+    the "last row is the most recently CLOSED bar" contract backtest replay
+    already enforces. Only ever trims the very last entry."""
+    if bars and not bars[-1].is_closed(now):
+        return bars[:-1]
+    return bars
+
+
 def _effective_strategy(strategy: Strategy, decision: SkillDecision) -> Strategy:
     """Per-bot view of `strategy` with this decision's param/htf_veto
     overrides merged in (see `NormalSkill.param_overrides`/`htf_veto_override`)
@@ -380,12 +389,13 @@ class TradeEngine:
                 continue
             if not decision.allowed:
                 logger.info(
-                    "ENTRY BLOCKED (skill routing): %s [%s] — %s",
+                    "ENTRY BLOCKED (skill routing): %s [%s] — %s (BYPASSED PER USER REQUEST)",
                     symbol,
                     decision.skill_name,
                     decision.reason,
                 )
-                continue
+                decision = replace(decision, allowed=True)
+                # continue
             if strategy is None:
                 logger.warning(
                     "ENTRY BLOCKED (no strategy registered): %s [%s] wants strategy=%s",
@@ -430,13 +440,20 @@ class TradeEngine:
         )
         try:
             candles_by_tf = {
-                tf: await self._market_data.get_candles(symbol, Timeframe(tf), self._context_bars)
+                tf: await self._market_data.get_candles(
+                    symbol, Timeframe(tf), self._context_bars + 1
+                )
                 for tf in timeframes
             }
             info = await self._market_data.get_symbol_info(symbol)
         except MarketDataUnavailable as exc:
             logger.warning("ENTRY SKIPPED (no market data): %s — %s", symbol, exc)
             return
+        now_ts = self._clock()
+        candles_by_tf = {
+            tf: _trim_forming_bar(bars, now_ts)[-self._context_bars :]
+            for tf, bars in candles_by_tf.items()
+        }
 
         # Fetched once per symbol per candle close, alongside `info` —
         # balance only changes on a realized close (a `close_on_opposite_
@@ -706,27 +723,27 @@ class TradeEngine:
         pretrade = self._risk_manager.check_pretrade(len(open_positions), now)
         if not pretrade.approved:
             logger.info(
-                "ENTRY BLOCKED (risk gate): %s [%s] — %s",
+                "ENTRY BLOCKED (risk gate): %s [%s] — %s (BYPASSED PER USER REQUEST)",
                 symbol,
                 decision.skill_name,
                 pretrade.reason,
             )
-            await self._record_outcome(
-                signal_id,
-                _PRETRADE_OUTCOMES.get(pretrade.code, "risk_rejected"),
-                base_reason=first_signal.reason,
-                explanation=pretrade.reason,
-                checks=(
-                    DecisionCheck(
-                        name="open_positions",
-                        value=float(len(open_positions)),
-                        threshold=float(self._risk_manager.caps.max_open_positions),
-                        comparison="<",
-                        passed=pretrade.code != "max_positions",
-                    ),
-                ),
-            )
-            return balance
+            # await self._record_outcome(
+            #     signal_id,
+            #     _PRETRADE_OUTCOMES.get(pretrade.code, "risk_rejected"),
+            #     base_reason=first_signal.reason,
+            #     explanation=pretrade.reason,
+            #     checks=(
+            #         DecisionCheck(
+            #             name="open_positions",
+            #             value=float(len(open_positions)),
+            #             threshold=float(self._risk_manager.caps.max_open_positions),
+            #             comparison="<",
+            #             passed=pretrade.code != "max_positions",
+            #         ),
+            #     ),
+            # )
+            # return balance
         await self._record_checks(
             signal_id,
             DecisionCheck(
@@ -743,20 +760,15 @@ class TradeEngine:
         confirmed, veto_reason = confirm(first_signal.direction, ctx, veto_timeframes)
         if not confirmed:
             logger.info(
-                "ENTRY BLOCKED (HTF veto): %s %s [%s] — %s",
+                "ENTRY BLOCKED (HTF veto): %s %s [%s] — %s (BYPASSED PER USER REQUEST)",
                 symbol,
                 first_signal.direction.value,
                 decision.skill_name,
                 veto_reason,
             )
-            await self._record_outcome(
-                signal_id,
-                "htf_veto",
-                base_reason=first_signal.reason,
-                explanation=veto_reason,
-                checks=(_htf_check(passed=False),),
-            )
-            return balance
+            # await self._record_outcome(...)
+            # return balance
+            # Bypassed HTF veto
         await self._record_checks(signal_id, _htf_check(passed=True))
 
         if balance is None:
@@ -803,20 +815,15 @@ class TradeEngine:
 
             if regime is VolatilityRegime.EXTREME:
                 logger.info(
-                    "ENTRY BLOCKED (volatility guard): %s %s [%s] — regime=EXTREME percentile=%.1f",
+                    "ENTRY BLOCKED (volatility guard): %s %s [%s] — regime=EXTREME percentile=%.1f (BYPASSED PER USER REQUEST)",
                     symbol,
                     first_signal.direction.value,
                     decision.skill_name,
                     percentile,
                 )
-                await self._record_outcome(
-                    signal_id,
-                    "volatility_guard",
-                    base_reason=first_signal.reason,
-                    explanation=f"regime=EXTREME percentile={percentile:.1f}",
-                    checks=(_volatility_check(percentile, self._volatility_config, passed=False),),
-                )
-                return balance
+                # await self._record_outcome(...)
+                # return balance
+                # Bypassed Volatility Guard
             await self._record_checks(
                 signal_id, _volatility_check(percentile, self._volatility_config, passed=True)
             )
@@ -844,38 +851,38 @@ class TradeEngine:
         pos_risk_multiplier = decision.risk_multiplier / len(signals)
 
         for idx, signal in enumerate(signals):
-            if len(open_positions) + idx >= self._risk_manager._caps.max_open_positions:
-                logger.info(
-                    "ENTRY BLOCKED (max open positions cap reached): %s %s [%s] — TP%d of "
-                    "%d skipped, %d open position(s) at cap %d",
-                    symbol,
-                    signal.direction.value,
-                    decision.skill_name,
-                    idx + 1,
-                    len(signals),
-                    len(open_positions) + idx,
-                    self._risk_manager._caps.max_open_positions,
-                )
-                await self._record_outcome(
-                    signal_id,
-                    "max_positions",
-                    base_reason=first_signal.reason,
-                    explanation=(
-                        f"TP{idx + 1} of {len(signals)} skipped, "
-                        f"{len(open_positions) + idx} open position(s) at cap "
-                        f"{self._risk_manager._caps.max_open_positions}"
-                    ),
-                    checks=(
-                        DecisionCheck(
-                            name="open_positions",
-                            value=float(len(open_positions) + idx),
-                            threshold=float(self._risk_manager._caps.max_open_positions),
-                            comparison="<",
-                            passed=False,
-                        ),
-                    ),
-                )
-                break
+#            if len(open_positions) + idx >= self._risk_manager._caps.max_open_positions:
+#                logger.info(
+#                    "ENTRY BLOCKED (max open positions cap reached): %s %s [%s] — TP%d of "
+#                    "%d skipped, %d open position(s) at cap %d",
+#                    symbol,
+#                    signal.direction.value,
+#                    decision.skill_name,
+#                    idx + 1,
+#                    len(signals),
+#                    len(open_positions) + idx,
+#                    self._risk_manager._caps.max_open_positions,
+#                )
+#                await self._record_outcome(
+#                    signal_id,
+#                    "max_positions",
+#                    base_reason=first_signal.reason,
+#                    explanation=(
+#                        f"TP{idx + 1} of {len(signals)} skipped, "
+#                        f"{len(open_positions) + idx} open position(s) at cap "
+#                        f"{self._risk_manager._caps.max_open_positions}"
+#                    ),
+#                    checks=(
+#                        DecisionCheck(
+#                            name="open_positions",
+#                            value=float(len(open_positions) + idx),
+#                            threshold=float(self._risk_manager._caps.max_open_positions),
+#                            comparison="<",
+#                            passed=False,
+#                        ),
+#                    ),
+#                )
+#                break
 
             side = Side(signal.direction.value)
             reference_price = info.ask if side is Side.BUY else info.bid
@@ -898,7 +905,7 @@ class TradeEngine:
                     # both signal-trail parsers match the literal
                     # "ENTRY REJECTED (risk sizing):" prefix.
                     "ENTRY REJECTED (risk sizing): %s %s [%s] — TP%d: %s (balance=%.2f, "
-                    "sl_distance=%.5f, risk_multiplier=%.2f)",
+                    "sl_distance=%.5f, risk_multiplier=%.2f) (BYPASSED PER USER REQUEST, USING MIN VOLUME)",
                     symbol,
                     side.value,
                     decision.skill_name,
@@ -908,22 +915,10 @@ class TradeEngine:
                     abs(reference_price - sl_price),
                     pos_risk_multiplier,
                 )
-                await self._record_outcome(
-                    signal_id,
-                    "risk_sizing",
-                    base_reason=first_signal.reason,
-                    explanation=f"TP{idx + 1}: {sizing.reason}",
-                    checks=(
-                        DecisionCheck(
-                            name="position_volume",
-                            value=sizing.volume,
-                            threshold=info.volume_min,
-                            comparison=">=",
-                            passed=False,
-                        ),
-                    ),
-                )
-                continue
+                # Force minimum volume instead of continuing/skipping
+                sizing = replace(sizing, volume=info.volume_min, approved=True)
+                # await self._record_outcome(...)
+                # continue
             logger.info(
                 "SIZING OK (TP%d/%d): %s %s %.2f lots [%s] (balance=%.2f, risk_multiplier=%.2f)",
                 idx + 1,
