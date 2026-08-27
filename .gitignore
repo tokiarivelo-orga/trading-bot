@@ -31,9 +31,11 @@ data/
 # Per-account gateway PID files (make dev-gateway ACCOUNT=<id>)
 gateway/run/
 
-# Backtest outputs
-backend/src/backtest/reports/*
-!backend/src/backtest/reports/.gitkeep
+# Backtest outputs — only the generated report JSON files, never source
+# code placed in this directory (see backend/src/backtest/reports/writer.py,
+# which this exact pattern previously swallowed after `git rm --cached`
+# would never apply here, since it was never committed in the first place).
+backend/src/backtest/reports/*.json
 
 # Generated demo/marketing videos — large binaries, host externally instead
 # of committing (see videos/README.md); keep the folder for local generation.
