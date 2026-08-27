@@ -27,10 +27,14 @@ logger = logging.getLogger(__name__)
 _GENERATED_DIR = Path(__file__).resolve().parent.parent / "src" / "strategies" / "generated"
 
 _STRATEGIES: tuple[tuple[str, str], ...] = (
-    ("xauusd_snd_qm_structure_m1", "xauusd_snd_qm_structure_m1_v1"),
-    ("xauusd_snd_qm_structure_m5", "xauusd_snd_qm_structure_m5_v1"),
-    ("xauusd_snd_qm_structure_m15", "xauusd_snd_qm_structure_m15_v1"),
-    ("xauusd_snd_qm_structure_h1", "xauusd_snd_qm_structure_h1_v1"),
+    # v4, not v1: v1-v3 carry tp1_target_rr=1.2, below XAUUSD's min_rr=1.5
+    # spread-gate floor, so the Scalp leg is vetoed on every single order
+    # (confirmed via 2026-08 backtest activity logs — see each file's own
+    # v4 changelog entry). Seeding v1 would silently activate that dead leg.
+    ("xauusd_snd_qm_structure_m1", "xauusd_snd_qm_structure_m1_v4"),
+    ("xauusd_snd_qm_structure_m5", "xauusd_snd_qm_structure_m5_v4"),
+    ("xauusd_snd_qm_structure_m15", "xauusd_snd_qm_structure_m15_v4"),
+    ("xauusd_snd_qm_structure_h1", "xauusd_snd_qm_structure_h1_v4"),
 )
 
 
