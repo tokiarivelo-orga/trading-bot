@@ -35,6 +35,11 @@ gateway/run/
 backend/src/backtest/reports/*
 !backend/src/backtest/reports/.gitkeep
 
+# Generated demo/marketing videos — large binaries, host externally instead
+# of committing (see videos/README.md); keep the folder for local generation.
+videos/demo_tour/*.mp4
+videos/demo_tour/*.webm
+
 # OS / editors
 .DS_Store
 .idea/

@@ -2,12 +2,18 @@
 
 This folder contains high-definition recorded video walkthroughs of the **AI Trading Bot** platform, formatted specifically for social media advertising campaigns on **Facebook** and **LinkedIn**.
 
+> **Generated videos are not committed to git** (`videos/demo_tour/*.mp4`, `*.webm`
+> are gitignored — they were previously tracked and bloated every clone by
+> ~29 MB). Run the recording scripts below to (re)generate them locally, or
+> host a copy externally (e.g. a GitHub Release asset or cloud storage) and
+> link it here if you need a persistently shared version.
+
 ---
 
 ## 📁 Repository Quick Links
 
-* 📄 **Marketing Ad Copy & All-Pages Storyboard (English & Français):** [`MARKETING_AD_SCENARIOS.md`](../MARKETING_AD_SCENARIOS.md)
-* 📄 **Chart Features Guide & French Subtitle Scenario (Français):** [`CHART_WORKFLOW_SCENARIO_FR.md`](../CHART_WORKFLOW_SCENARIO_FR.md)
+* 📄 **Marketing Ad Copy & All-Pages Storyboard (English & Français):** [`MARKETING_AD_SCENARIOS.md`](./MARKETING_AD_SCENARIOS.md)
+* 📄 **Chart Features Guide & French Subtitle Scenario (Français):** [`CHART_WORKFLOW_SCENARIO_FR.md`](./CHART_WORKFLOW_SCENARIO_FR.md)
 * 🛠️ **All-Pages Platform Walkthrough Recording Script:** [`scripts/record_demo_tour.py`](../scripts/record_demo_tour.py)
 * 🛠️ **Chart Features & French Subtitles Recording Script:** [`scripts/record_chart_features.py`](../scripts/record_chart_features.py)
 * 🎥 **Generated All-Pages MP4 Advertisement Video (~15.5 MB):** [`demo_tour/AI_Trading_Bot_Platform_Walkthrough_90s.mp4`](./demo_tour/AI_Trading_Bot_Platform_Walkthrough_90s.mp4)
@@ -71,4 +77,4 @@ When executed, the script automatically traverses the following 7 scenes in real
 Once the script finishes running, grab your optimized video at:
 **`videos/demo_tour/AI_Trading_Bot_Platform_Walkthrough_90s.mp4`**
 
-Pair this video directly with our tested long-form & short-form ad copy (available in both **English 🇬🇧** and **French 🇫🇷**) found in [`MARKETING_AD_SCENARIOS.md`](../MARKETING_AD_SCENARIOS.md) when publishing on **LinkedIn** (institutional/quant focus) or **Facebook** (proactive retail Gold/XAUUSD focus).
+Pair this video directly with our tested long-form & short-form ad copy (available in both **English 🇬🇧** and **French 🇫🇷**) found in [`MARKETING_AD_SCENARIOS.md`](./MARKETING_AD_SCENARIOS.md) when publishing on **LinkedIn** (institutional/quant focus) or **Facebook** (proactive retail Gold/XAUUSD focus).

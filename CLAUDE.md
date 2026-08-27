@@ -1,6 +1,8 @@
 # Project rules — AI Trading Bot
 
-Read `IMPLEMENTATION_PLAN.md` for the full design. These rules are binding.
+`IMPLEMENTATION_PLAN.md` holds the full design, organized by phase — consult
+the phase/section relevant to the task at hand rather than reading the whole
+671-line file on every task. These rules are binding.
 
 ## Architecture
 - Hexagonal per module: business logic lives in `domain/` and `application/` ONLY.
