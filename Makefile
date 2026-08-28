@@ -255,6 +255,7 @@ build-frontend: ## Next.js production build (includes TypeScript type-checking)
 
 .PHONY: db-upgrade
 db-upgrade: ## Apply all pending migrations (alembic upgrade head)
+	mkdir -p $(BACKEND_DIR)/data
 	cd $(BACKEND_DIR) && $(UV) run alembic upgrade head
 
 .PHONY: db-downgrade

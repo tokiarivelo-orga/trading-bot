@@ -51,6 +51,11 @@ the phase/section relevant to the task at hand rather than reading the whole
   veto reason, spread, lot calculation) at INFO.
 - Before declaring any task done, run from `backend/`:
   `uv run ruff check src tests` and `uv run pytest`.
+- One-time prerequisite for the full suite: `make db-upgrade` (creates
+  `backend/data/trading.db` and applies migrations — see LAUNCH.md §2). Most
+  tests use an isolated in-memory/tmp DB and don't need it, but `test_health.py`
+  hits the real app with the default `sqlite:///./data/trading.db` and fails
+  with `unable to open database file` on a fresh checkout without it.
 
 ## Frontend
 - Stack: **Next.js (App Router) + Tailwind CSS + TypeScript**. No Vite, no CRA,
