@@ -168,6 +168,29 @@ def _trim_forming_bar(bars: list[Candle], now: datetime) -> list[Candle]:
     return bars
 
 
+# `Signal.size_multiplier` (strategies/domain/models.py) is a bounded
+# per-signal RISK-AMOUNT multiplier several generated strategies now set for
+# setups they data-mined a real historical edge for (e.g.
+# xauusd_iof_scalp_m1_v3's `_high_conviction_fvg_bear_size_multiplier` — live
+# ACTIVE and firing today, see strategy_versions) — but until this constant
+# and `_clamp_size_multiplier` existed, nothing in the engine ever read the
+# field, so every strategy that set it above 1.0 had no actual effect on
+# position size. Generated code is AI-produced and, per CLAUDE.md, must never
+# be trusted to route around configs/risk.yaml's caps itself — so the engine
+# clamps here rather than trusting each strategy's own internal bound.
+# Floor 1.0: this is strictly an "on top of" multiplier for setups with
+# demonstrated historical edge, never a lever to shrink a position below the
+# account's normal baseline sizing. Ceiling 2.0 matches the highest multiplier
+# any strategy currently mines (xauusd_snd_qm_structure_adaptive_m1_v3's
+# QM/supply-overlap finding, PF 2.0+, n=100+ closed trades).
+_SIZE_MULTIPLIER_FLOOR = 1.0
+_SIZE_MULTIPLIER_CEILING = 2.0
+
+
+def _clamp_size_multiplier(value: float) -> float:
+    return max(_SIZE_MULTIPLIER_FLOOR, min(_SIZE_MULTIPLIER_CEILING, value))
+
+
 def _effective_strategy(strategy: Strategy, decision: SkillDecision) -> Strategy:
     """Per-bot view of `strategy` with this decision's param/htf_veto
     overrides merged in (see `NormalSkill.param_overrides`/`htf_veto_override`)
@@ -607,20 +630,28 @@ class TradeEngine:
         # `close_on_opposite_signal` strategy can free up its own slot below
         # before the max-open-positions cap is checked against the count.
         if symbol == "Step Index 200":
+            m5_bars = bot_ctx.candles.get("M5")
             logger.info(
-                "TRACE _enter_for_bot pre-evaluate symbol=%s strategy=%s m5_bars=%s own_position=%s",
+                "TRACE _enter_for_bot pre-evaluate symbol=%s strategy=%s m5_bars=%s "
+                "own_position=%s",
                 symbol,
                 strategy.spec.name,
-                len(bot_ctx.candles.get("M5", [])) if bot_ctx.candles.get("M5") is not None else None,
+                len(m5_bars) if m5_bars is not None else None,
                 bot_ctx.own_position,
             )
         try:
             signal_res = strategy.evaluate(bot_ctx)
         except Exception:
-            logger.exception("TRACE _enter_for_bot evaluate raised symbol=%s strategy=%s", symbol, strategy.spec.name)
+            logger.exception(
+                "TRACE _enter_for_bot evaluate raised symbol=%s strategy=%s",
+                symbol,
+                strategy.spec.name,
+            )
             raise
         if symbol == "Step Index 200":
-            logger.info("TRACE _enter_for_bot post-evaluate symbol=%s signal_res=%r", symbol, signal_res)
+            logger.info(
+                "TRACE _enter_for_bot post-evaluate symbol=%s signal_res=%r", symbol, signal_res
+            )
         if signal_res is None:
             return balance
         raw = tuple(signal_res) if isinstance(signal_res, (list, tuple)) else (signal_res,)
@@ -815,7 +846,8 @@ class TradeEngine:
 
             if regime is VolatilityRegime.EXTREME:
                 logger.info(
-                    "ENTRY BLOCKED (volatility guard): %s %s [%s] — regime=EXTREME percentile=%.1f (BYPASSED PER USER REQUEST)",
+                    "ENTRY BLOCKED (volatility guard): %s %s [%s] — regime=EXTREME "
+                    "percentile=%.1f (BYPASSED PER USER REQUEST)",
                     symbol,
                     first_signal.direction.value,
                     decision.skill_name,
@@ -838,6 +870,20 @@ class TradeEngine:
                     self._volatility_config.tp_multiplier_normal,
                 ),
                 VolatilityRegime.HIGH: (
+                    self._volatility_config.sl_multiplier_high,
+                    self._volatility_config.tp_multiplier_high,
+                ),
+                # EXTREME has no dedicated multiplier field — before the
+                # volatility guard was bypassed, EXTREME always returned
+                # early above and this lookup never ran for it. Now that an
+                # EXTREME-regime signal reaches sizing too, an unhandled key
+                # here would KeyError and (same failure mode as every other
+                # uncaught exception in this loop) abort every other
+                # candidate bot's entry evaluation for the candle. HIGH's
+                # multiplier is the widest of the three defined tiers, so it
+                # errs toward a wider SL/TP rather than an unscaled one that
+                # would be too tight for genuinely extreme volatility.
+                VolatilityRegime.EXTREME: (
                     self._volatility_config.sl_multiplier_high,
                     self._volatility_config.tp_multiplier_high,
                 ),
@@ -890,6 +936,9 @@ class TradeEngine:
             sl_price = reference_price - sign * signal.sl_points * sl_mult
             tp_price = reference_price + sign * signal.tp_points * tp_mult
 
+            size_multiplier = _clamp_size_multiplier(signal.size_multiplier)
+            effective_risk_multiplier = pos_risk_multiplier * size_multiplier
+
             sizing = self._risk_manager.size_position(
                 balance=balance,
                 sl_distance_price=abs(reference_price - sl_price),
@@ -897,7 +946,7 @@ class TradeEngine:
                 volume_min=info.volume_min,
                 volume_max=info.volume_max,
                 volume_step=info.volume_step,
-                risk_multiplier=pos_risk_multiplier,
+                risk_multiplier=effective_risk_multiplier,
             )
             if not sizing.approved:
                 logger.info(
@@ -905,7 +954,8 @@ class TradeEngine:
                     # both signal-trail parsers match the literal
                     # "ENTRY REJECTED (risk sizing):" prefix.
                     "ENTRY REJECTED (risk sizing): %s %s [%s] — TP%d: %s (balance=%.2f, "
-                    "sl_distance=%.5f, risk_multiplier=%.2f) (BYPASSED PER USER REQUEST, USING MIN VOLUME)",
+                    "sl_distance=%.5f, risk_multiplier=%.2f, size_multiplier=%.2f) "
+                    "(BYPASSED PER USER REQUEST, USING MIN VOLUME)",
                     symbol,
                     side.value,
                     decision.skill_name,
@@ -913,14 +963,16 @@ class TradeEngine:
                     sizing.reason,
                     balance,
                     abs(reference_price - sl_price),
-                    pos_risk_multiplier,
+                    effective_risk_multiplier,
+                    size_multiplier,
                 )
                 # Force minimum volume instead of continuing/skipping
                 sizing = replace(sizing, volume=info.volume_min, approved=True)
                 # await self._record_outcome(...)
                 # continue
             logger.info(
-                "SIZING OK (TP%d/%d): %s %s %.2f lots [%s] (balance=%.2f, risk_multiplier=%.2f)",
+                "SIZING OK (TP%d/%d): %s %s %.2f lots [%s] (balance=%.2f, risk_multiplier=%.2f, "
+                "size_multiplier=%.2f%s)",
                 idx + 1,
                 len(signals),
                 symbol,
@@ -928,7 +980,9 @@ class TradeEngine:
                 sizing.volume,
                 decision.skill_name,
                 balance,
-                pos_risk_multiplier,
+                effective_risk_multiplier,
+                size_multiplier,
+                " HIGH-CONVICTION" if size_multiplier > 1.0 else "",
             )
             await self._record_checks(
                 signal_id,
@@ -1012,7 +1066,27 @@ class TradeEngine:
             for position in own_positions:
                 if position.ticket in closed_tickets:
                     continue
-                await self._position_manager.apply_strategy_action(position, action)
+                try:
+                    await self._position_manager.apply_strategy_action(position, action)
+                except OrderRejected as exc:
+                    # A broker reject here (most commonly retcode=10016 —
+                    # SL too close to price) must never propagate: uncaught,
+                    # it climbs out of this bot's `_enter_for_bot` through
+                    # `_try_enter`'s `for decision, strategy in candidates`
+                    # loop and aborts entry evaluation for every candidate
+                    # ordered after this one on the candle — the root cause
+                    # of the 2026-08-19 broad silent-fleet incident. Logged
+                    # and skipped instead: this action sits out this
+                    # candle, every other bot still gets evaluated.
+                    logger.warning(
+                        "strategy exit action rejected: ticket=%d %s [%s] action=%s — %s",
+                        position.ticket,
+                        symbol,
+                        decision.skill_name,
+                        action.action.value,
+                        exc,
+                    )
+                    continue
                 if action.action is ExitActionKind.CLOSE:
                     closed_tickets.add(position.ticket)
         if not closed_tickets:

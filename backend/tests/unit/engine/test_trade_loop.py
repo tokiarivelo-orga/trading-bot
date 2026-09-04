@@ -1,9 +1,11 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+import pytest
 
 from src.broker.domain.trading import ExecutionResult, OrderRejected, Position, Side
 from src.engine.application.risk_manager import RiskManager
-from src.engine.application.trade_loop import TradeEngine, _veto_timeframe
+from src.engine.application.trade_loop import TradeEngine, _trim_forming_bar, _veto_timeframe
 from src.engine.domain.models import RiskCaps
 from src.engine.domain.regime import RegimeConfig
 from src.engine.domain.volatility import VolatilityConfig
@@ -391,6 +393,72 @@ class FakeExitStrategy(FakeStrategy):
         return self._exit_decisions if len(self._exit_decisions) != 1 else self._exit_decisions[0]
 
 
+class ContextCapturingStrategy(FakeStrategy):
+    """Records the `MarketContext` handed to `evaluate()` on each call, so a
+    test can inspect exactly which candles the engine fed the strategy."""
+
+    def __init__(self, signal, **kwargs):
+        super().__init__(signal, **kwargs)
+        self.seen_contexts: list[MarketContext] = []
+
+    def evaluate(self, ctx: MarketContext):
+        self.seen_contexts.append(ctx)
+        return self._signal
+
+
+class FormingLastCandleMarketData(FakeMarketData):
+    """Reproduces what the live gateway adapter (`GatewayMarketData`, backed
+    by MT5's `copy_rates_from_pos`) hands back: `closed_bar_count` properly
+    closed bars ending at `now`'s most recently closed bar, PLUS one more
+    bar for the currently still-forming period — unlike `FakeMarketData`,
+    which always returns a fixed count regardless of what's requested (and
+    so can't exercise an over/under-fetch bug), this actually honors
+    `count` and marks its trailing bar as not yet closed relative to `now`,
+    the way `Candle.is_closed` sees it. Distinguishable from every closed
+    bar by `close=999.0` and `tick_volume=1`."""
+
+    FORMING_CLOSE = 999.0
+
+    def __init__(self, *, now: datetime, closed_bar_count: int, info=XAUUSD_INFO):
+        super().__init__(info=info)
+        self.now = now
+        self.closed_bar_count = closed_bar_count
+        self.requested_counts: list[int] = []
+
+    async def get_candles(self, symbol, timeframe, count):
+        self.requested_timeframes.append(timeframe)
+        self.requested_counts.append(count)
+        tf = Timeframe(timeframe)
+        step = timedelta(seconds=tf.seconds)
+        last_closed_open = tf.last_closed_open(self.now)
+        closed = [
+            Candle(
+                symbol=symbol,
+                timeframe=tf,
+                time=last_closed_open - step * i,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.0 + (self.closed_bar_count - i),
+                tick_volume=200,
+                spread_points=30,
+            )
+            for i in range(self.closed_bar_count - 1, -1, -1)
+        ]
+        forming = Candle(
+            symbol=symbol,
+            timeframe=tf,
+            time=tf.bar_open(self.now),
+            open=self.FORMING_CLOSE,
+            high=self.FORMING_CLOSE,
+            low=self.FORMING_CLOSE,
+            close=self.FORMING_CLOSE,
+            tick_volume=1,
+            spread_points=30,
+        )
+        return (closed + [forming])[-count:]
+
+
 class FakeStrategySource:
     def __init__(self, strategies: dict[str, object]):
         self._strategies = strategies
@@ -609,14 +677,23 @@ async def test_no_signal_skips_entry():
 
 
 async def test_htf_veto_skips_entry():
+    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
+    # "BYPASSED PER USER REQUEST" logging) — the veto is still evaluated and
+    # logged, but no longer blocks the entry. This test now documents that:
+    # the earlier hard-block behavior is exactly what got turned off.
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     engine, order_service, *_ = make_engine(market_data=market_data, context_bars=60)
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
 
 
 async def test_pretrade_risk_block_skips_entry():
+    # Engine-level pretrade risk gate (max_open_positions here) is
+    # intentionally bypassed — see trade_loop.py's "BYPASSED PER USER
+    # REQUEST" logging. The gate is still evaluated and logged but no
+    # longer blocks the entry, so a second position opens on top of the
+    # existing one despite the cap of 1.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -642,7 +719,7 @@ async def test_pretrade_risk_block_skips_entry():
     )
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
 
 
 async def test_order_rejected_does_not_crash_or_record_trade():
@@ -817,6 +894,119 @@ async def test_context_fetch_covers_strategy_confirmation_and_veto_timeframes():
     }
 
 
+# ── forming-last-candle trim (2026-08-19 qm_structure_m1 silent-bot fix) ────
+# The gateway's `/candles` (MT5's `copy_rates_from_pos` under the hood)
+# always returns the currently-forming bar as its newest row — unlike
+# backtest replay (`ReplayMarketDataPort`), which only ever exposes bars
+# whose close time has already passed. A strategy that compares its last
+# two bars to detect a same-bar transition (e.g. the qm_structure family's
+# `fresh_touch` gate) needs the bar that actually just closed to be last,
+# not a few-seconds-old sliver of the next one — see `_trim_forming_bar`'s
+# docstring in trade_loop.py.
+
+
+def test_trim_forming_bar_drops_a_not_yet_closed_trailing_bar():
+    tf = Timeframe.M1
+    closed = Candle(
+        symbol="XAUUSD",
+        timeframe=tf,
+        time=datetime(2026, 8, 19, 8, 37, tzinfo=UTC),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5,
+        tick_volume=200,
+        spread_points=15,
+    )
+    forming = Candle(
+        symbol="XAUUSD",
+        timeframe=tf,
+        time=datetime(2026, 8, 19, 8, 38, tzinfo=UTC),
+        open=100.5,
+        high=100.5,
+        low=100.5,
+        close=100.5,
+        tick_volume=1,
+        spread_points=15,
+    )
+    now = datetime(2026, 8, 19, 8, 38, 13, tzinfo=UTC)  # 13s into the forming bar
+
+    assert _trim_forming_bar([closed, forming], now) == [closed]
+
+
+def test_trim_forming_bar_is_a_no_op_once_the_trailing_bar_has_closed():
+    tf = Timeframe.M1
+    closed = Candle(
+        symbol="XAUUSD",
+        timeframe=tf,
+        time=datetime(2026, 8, 19, 8, 37, tzinfo=UTC),
+        open=100.0,
+        high=101.0,
+        low=99.0,
+        close=100.5,
+        tick_volume=200,
+        spread_points=15,
+    )
+    also_closed = Candle(
+        symbol="XAUUSD",
+        timeframe=tf,
+        time=datetime(2026, 8, 19, 8, 38, tzinfo=UTC),
+        open=100.5,
+        high=101.5,
+        low=100.0,
+        close=101.0,
+        tick_volume=210,
+        spread_points=15,
+    )
+    now = datetime(2026, 8, 19, 8, 39, 5, tzinfo=UTC)  # both bars fully closed by now
+
+    assert _trim_forming_bar([closed, also_closed], now) == [closed, also_closed]
+
+
+def test_trim_forming_bar_handles_an_empty_list():
+    assert _trim_forming_bar([], datetime(2026, 8, 19, 8, 38, tzinfo=UTC)) == []
+
+
+async def test_still_forming_candle_never_reaches_strategy_evaluation():
+    """Regression for the 2026-08-19 bug: `xauusd_snd_qm_structure_m1`/
+    `_fixed_m1`/`_adaptive_m1` went ~24h without a single signal even
+    though their `own_position is not None` guard was never the blocker
+    (confirmed live: `own_position` was genuinely `None` throughout) and a
+    valid fresh zone-touch demonstrably occurred several times in that
+    window. Root cause: `get_candles` always includes MT5's still-forming
+    current bar as the newest row, so the entry-TF bar that actually just
+    closed — and triggered this very `CandleClosed` event — was silently
+    sitting one row *before* "last", not at it. Any gate comparing the last
+    two bars for a same-bar transition (`fresh_touch`) then almost never
+    fires. `_try_enter` must over-fetch by one bar and trim the trailing
+    still-forming one before a strategy ever sees it."""
+    now = datetime(2026, 8, 19, 8, 38, 13, tzinfo=UTC)
+    context_bars = 5
+    market_data = FormingLastCandleMarketData(now=now, closed_bar_count=context_bars)
+    strategy = ContextCapturingStrategy(
+        None, entry_timeframe="M1", confirmation_timeframes=(), htf_veto=False
+    )
+    engine, *_ = make_engine(
+        market_data=market_data,
+        strategy=strategy,
+        context_bars=context_bars,
+        clock=lambda: now,
+    )
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M1"))
+
+    # Over-fetched by one, specifically so the still-forming bar can be
+    # dropped without shrinking the window the strategy actually gets.
+    assert market_data.requested_counts == [context_bars + 1]
+    assert len(strategy.seen_contexts) == 1
+    m1 = strategy.seen_contexts[0].candles["M1"]
+    assert len(m1) == context_bars
+    assert market_data.FORMING_CLOSE not in m1["close"].to_list()
+    # The last row the strategy sees is the bar that just closed — not a
+    # forming sliver of the one after it.
+    assert m1["time"].iloc[-1] == Timeframe.M1.last_closed_open(now)
+
+
 def test_veto_timeframe_is_next_above_entry_timeframe():
     expected = {
         "M1": "M5",
@@ -876,10 +1066,13 @@ async def test_two_bots_on_one_symbol_each_place_their_own_order():
 
 
 async def test_second_bot_sizing_sees_first_bots_fresh_position():
-    # max_open_positions=1 means the second bot in the same candle close
-    # must see the first bot's just-opened position and get blocked by the
-    # risk gate — proving the pretrade check is re-fetched per bot, not
-    # hoisted once for the whole candle.
+    # Originally: max_open_positions=1 meant the second bot in the same
+    # candle close would see the first bot's just-opened position and get
+    # blocked by the risk gate, proving the pretrade check is re-fetched per
+    # bot rather than hoisted once for the whole candle. The gate itself is
+    # now intentionally bypassed (see trade_loop.py's "BYPASSED PER USER
+    # REQUEST" logging), so both bots open — this documents that current
+    # reality rather than the per-bot re-fetch, which is now moot.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -902,8 +1095,8 @@ async def test_second_bot_sizing_sees_first_bots_fresh_position():
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1
-    assert order_service.opened[0]["magic"] == 111
+    assert len(order_service.opened) == 2
+    assert [o["magic"] for o in order_service.opened] == [111, 222]
 
 
 async def test_param_override_reaches_strategy_evaluate():
@@ -968,6 +1161,10 @@ async def test_two_bots_same_strategy_different_param_overrides_do_not_leak():
 
 
 async def test_htf_veto_override_forces_veto_on_despite_strategy_default_off():
+    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
+    # "BYPASSED PER USER REQUEST" logging) — forcing the veto on via
+    # `htf_veto_override` still gets evaluated and logged, but no longer
+    # blocks the entry.
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     strategy = FakeStrategy(BUY_SIGNAL, htf_veto=False)
     decision = SkillDecision(
@@ -986,7 +1183,7 @@ async def test_htf_veto_override_forces_veto_on_despite_strategy_default_off():
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
 
 
 async def test_htf_veto_override_forces_veto_off_despite_strategy_default_on():
@@ -1200,10 +1397,40 @@ async def test_multi_position_scaling_opens_tiered_tp_orders():
     assert order_service.opened[2]["sl"] == 2400.3 - 10.0
 
 
+async def test_signal_size_multiplier_scales_that_signals_volume_only():
+    # pos_risk_multiplier must be folded in per-signal (decision.risk_
+    # multiplier / len(signals) * signal.size_multiplier), not computed once
+    # before the loop — otherwise a high-conviction signal's size_multiplier
+    # would be silently dropped. sig1 asks for 2x risk; sig2/sig3 stay at the
+    # implicit default (1.0), so sig1's lot size should come out exactly
+    # double sig2/sig3's, and sig2/sig3 must still match each other.
+    sig1 = Signal(
+        direction=Direction.BUY, sl_points=10.0, tp_points=10.0,
+        reason="TP1 high-conviction", size_multiplier=2.0,
+    )
+    sig2 = Signal(direction=Direction.BUY, sl_points=10.0, tp_points=25.0, reason="TP2 zone")
+    sig3 = Signal(direction=Direction.BUY, sl_points=10.0, tp_points=40.0, reason="TP3 runner")
+    strategy = FakeStrategy((sig1, sig2, sig3))
+    engine, order_service, *_ = make_engine(strategy=strategy)
+
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    assert len(order_service.opened) == 3
+    vol1 = order_service.opened[0]["volume"]
+    vol2 = order_service.opened[1]["volume"]
+    vol3 = order_service.opened[2]["volume"]
+    assert vol2 == vol3
+    assert vol1 == pytest.approx(2 * vol2)
+
+
 # ---- volatility guard (bot-agnostic, engine-level) --------------------------
 
 
 async def test_extreme_volatility_regime_blocks_entry(caplog):
+    # Engine-level EXTREME-regime volatility guard is intentionally bypassed
+    # (see trade_loop.py's "BYPASSED PER USER REQUEST" logging) — the
+    # EXTREME regime is still detected and logged, but no longer blocks the
+    # entry.
     volatility_config = VolatilityConfig(atr_period=3, regime_lookback_bars=10)
     candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 16)
     market_data = FakeMarketData(candles=candles)
@@ -1214,7 +1441,7 @@ async def test_extreme_volatility_regime_blocks_entry(caplog):
     with caplog.at_level("INFO"):
         await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
     assert "ENTRY BLOCKED (volatility guard)" in caplog.text
     assert "regime=EXTREME" in caplog.text
 
@@ -1346,7 +1573,12 @@ async def test_no_account_connected_line_is_skill_scoped_and_parses(caplog):
     assert "no account balance available" in signals[0].reason
 
 
-async def test_max_open_positions_line_is_skill_scoped_and_parses(caplog):
+async def test_max_open_positions_per_signal_cap_is_bypassed(caplog):
+    # The per-signal (multi-TP-leg) max-open-positions loop cap, and its
+    # "ENTRY BLOCKED (max open positions cap reached)" log line, are
+    # intentionally bypassed (commented out — see trade_loop.py's "BYPASSED
+    # PER USER REQUEST" logging elsewhere in this same method): both TP
+    # targets now open even though the cap is 1.
     caplog.set_level("INFO")
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
@@ -1368,22 +1600,26 @@ async def test_max_open_positions_line_is_skill_scoped_and_parses(caplog):
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1  # second target hits the cap
-    line = next(
-        m for m in caplog.messages if m.startswith("ENTRY BLOCKED (max open positions cap reached)")
+    assert len(order_service.opened) == 2
+    assert not any(
+        m.startswith("ENTRY BLOCKED (max open positions cap reached)") for m in caplog.messages
     )
-    assert "[normal/xauusd/fake]" in line
-    assert " — " in line
 
 
 async def test_risk_sizing_rejection_prefix_has_no_tp_index(caplog):
+    # Risk-sizing rejection is intentionally bypassed too — see
+    # trade_loop.py's "BYPASSED PER USER REQUEST, USING MIN VOLUME" logging:
+    # the rejection is still evaluated and logged (hence still parses as
+    # "risk_rejected" in the signal trail below, matching the log line
+    # actually emitted), but the entry now opens anyway at the broker
+    # minimum volume instead of being skipped.
     caplog.set_level("INFO")
     # A zero balance makes sizing fail for every target.
     engine, order_service, *_ = make_engine(account=FakeAccountService(balance=0.0))
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
     line = next(m for m in caplog.messages if m.startswith("ENTRY REJECTED (risk sizing)"))
     assert line.startswith("ENTRY REJECTED (risk sizing): ")
     assert " — TP1: " in line
@@ -1519,6 +1755,72 @@ async def test_exit_decision_alone_with_no_fresh_signal_still_applies():
     assert order_service.opened == []
 
 
+async def test_rejected_strategy_exit_action_does_not_starve_later_candidates():
+    # Root cause of the 2026-08-19 broad silent-fleet incident: bot "a"'s own
+    # BREAKEVEN action gets rejected by the broker (retcode=10016, its SL
+    # candidate too close to price) inside `_apply_strategy_exit_decisions`.
+    # Uncaught, this propagated out of `_enter_for_bot` through `_try_enter`'s
+    # `for decision, strategy in candidates` loop, aborting entry evaluation
+    # for every candidate ordered after "a" on that candle — bot "b" here —
+    # even though bot "b" has nothing to do with "a"'s rejected order. This
+    # mirrors `PositionManager.on_candle_closed`'s own equivalent OrderRejected
+    # handling around its `_manage` call.
+    existing = Position(
+        ticket=7,
+        symbol="XAUUSD",
+        side=Side.BUY,
+        volume=0.1,
+        open_price=2400.0,
+        sl=2390.0,
+        tp=2420.0,
+        open_time=datetime.now(UTC),
+        profit=0.0,
+        magic=111,
+    )
+    order_service = FakeOrderService(positions=[existing])
+
+    class RejectingPositionManager(FakePositionManager):
+        async def apply_strategy_action(self, position, action):
+            await super().apply_strategy_action(position, action)
+            raise OrderRejected(
+                f"position_modify({position.ticket}) rejected: retcode=10016 — "
+                "invalid stops — sl/tp too close to price",
+                retcode=10016,
+            )
+
+    position_manager = RejectingPositionManager()
+    decisions = [
+        SkillDecision(allowed=True, skill_name="normal/xauusd/a", strategy_name="a", magic=111),
+        SkillDecision(allowed=True, skill_name="normal/xauusd/b", strategy_name="b", magic=222),
+    ]
+    strategy_source = FakeStrategySource(
+        {
+            "a": FakeExitStrategy(
+                ExitDecision(action=ExitActionKind.BREAKEVEN, reason="continuation confirmed"),
+                signal=None,
+            ),
+            "b": FakeStrategy(BUY_SIGNAL),
+        }
+    )
+    engine, order_service, *_ = make_engine(
+        order_service=order_service,
+        position_manager=position_manager,
+        skill_selector=FakeSkillSelector(decisions),
+        strategy_source=strategy_source,
+    )
+
+    # Must not raise — the rejection is caught and logged, not propagated.
+    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
+
+    # Bot "a"'s rejected action was attempted...
+    assert position_manager.applied_actions == [
+        (7, ExitActionKind.BREAKEVEN, "continuation confirmed")
+    ]
+    # ...but bot "b", ordered after "a" in the same candidates loop, still
+    # got evaluated and opened its own position instead of being starved.
+    assert [o["magic"] for o in order_service.opened] == [222]
+
+
 async def test_account_status_refetched_after_exit_decision_close():
     existing = Position(
         ticket=7,
@@ -1568,9 +1870,13 @@ async def test_order_book_capture_fires_once_on_the_opened_path():
 
 async def test_order_book_capture_fires_once_on_the_vetoed_path():
     """Same trigger point as the regime tag and `_record_decision` — a
-    signal that never fills (HTF veto here) still gets exactly one capture
-    attempt, since capture is scheduled right after `_record_decision`, well
-    before the HTF-confirm gate runs."""
+    signal on the HTF-veto path still gets exactly one capture attempt,
+    since capture is scheduled right after `_record_decision`, well before
+    the HTF-confirm gate runs. The HTF veto itself is now intentionally
+    bypassed (see trade_loop.py's "BYPASSED PER USER REQUEST" logging), so
+    unlike when this test was written the signal now also fills — capture
+    firing exactly once at that same trigger point is what's still under
+    test here."""
     capture = FakeOrderBookCapture()
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     engine, order_service, *_ = make_engine(
@@ -1581,7 +1887,7 @@ async def test_order_book_capture_fires_once_on_the_vetoed_path():
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert order_service.opened == []
+    assert len(order_service.opened) == 1
     assert len(capture.calls) == 1
     assert capture.calls[0][1] == "XAUUSD"
 

@@ -343,14 +343,10 @@ export function MultiChartLayout(props: ChartPanelProps) {
           <span>
             Session replay —{' '}
             {new Date(activeReplayUI.ui.sessionPeriod.from * 1000)
-              .toISOString()
-              .replace('T', ' ')
-              .slice(0, 16)}{' '}
+              .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}{' '}
             →{' '}
             {new Date(activeReplayUI.ui.sessionPeriod.to * 1000)
-              .toISOString()
-              .replace('T', ' ')
-              .slice(0, 16)}
+              .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
             {activeReplayUI.ui.loadingPage &&
               ` — loading… page ${activeReplayUI.ui.loadingPage.page} (${activeReplayUI.ui.loadingPage.loaded.toLocaleString()} candles so far)`}
           </span>

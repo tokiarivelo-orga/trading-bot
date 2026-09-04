@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { collapseByTime } from "./chartData";
 import { attachSeriesTooltip, type AnySeries, type ChartedBot, type TooltipState } from "./chartTooltip";
 import { TooltipBox } from "./TooltipBox";
+import { getLocalTimeZoneOptions } from "../chart/chartFormat";
 
 const SERIES_COLOR_VARS = [
   "--color-series-1",
@@ -40,10 +41,12 @@ export function BotEquityChart({ bots }: { bots: ChartedBot[] }) {
     if (!container) return;
 
     const line = cssVar("--color-line");
+    const timeZoneOpts = getLocalTimeZoneOptions();
     const chart = createChart(container, {
       layout: { background: { color: cssVar("--color-panel") }, textColor: cssVar("--color-ink") },
       grid: { vertLines: { color: line }, horzLines: { color: line } },
-      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line , tickMarkFormatter: timeZoneOpts.timeScale.tickMarkFormatter },
+      localization: timeZoneOpts.localization,
       rightPriceScale: { borderColor: line },
     });
 

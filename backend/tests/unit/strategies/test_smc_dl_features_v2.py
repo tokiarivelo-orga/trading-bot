@@ -145,9 +145,7 @@ def test_live_vector_equals_last_batch_row() -> None:
     m5 = _series(500)
     m15, h1, h4 = _htf(m5, 3), _htf(m5, 12), _htf(m5, 48)
     batch = compute_features_batch(m5, m15, h1, h4, spread_points=25.0)
-    live = compute_features_live(
-        {"M5": m5, "M15": m15, "H1": h1, "H4": h4}, spread_points=25.0
-    )
+    live = compute_features_live({"M5": m5, "M15": m15, "H1": h1, "H4": h4}, spread_points=25.0)
     assert live is not None
     np.testing.assert_allclose(live, batch.iloc[-1].to_numpy(dtype=np.float32), rtol=1e-5)
 
@@ -201,9 +199,7 @@ def test_works_without_a_datetime_index() -> None:
     m5 = _series(400)
     indexed = compute_features_batch(m5)
     columnar = compute_features_batch(m5.reset_index(drop=True))
-    pd.testing.assert_frame_equal(
-        indexed.reset_index(drop=True), columnar.reset_index(drop=True)
-    )
+    pd.testing.assert_frame_equal(indexed.reset_index(drop=True), columnar.reset_index(drop=True))
 
 
 def test_missing_higher_timeframes_do_not_crash() -> None:

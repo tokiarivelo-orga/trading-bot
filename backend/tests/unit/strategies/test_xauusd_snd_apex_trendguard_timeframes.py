@@ -50,8 +50,14 @@ GENERATED = Path(__file__).resolve().parents[3] / "src/strategies/generated"
 # `run_backtest.HISTORY_BUFFER` (60 calendar days) — D1/W1 count trading
 # days only (~5 per week), which is exactly why they are the tight ones.
 BARS_IN_BACKTEST_BUFFER = {
-    "M1": 86_400, "M5": 17_280, "M15": 5_760, "M30": 2_880,
-    "H1": 1_440, "H4": 360, "D1": 43, "W1": 8,
+    "M1": 86_400,
+    "M5": 17_280,
+    "M15": 5_760,
+    "M30": 2_880,
+    "H1": 1_440,
+    "H4": 360,
+    "D1": 43,
+    "W1": 8,
 }
 
 FAMILY = [
@@ -71,9 +77,7 @@ _FILE_VERSION = {"m1": 5, "m5": 3, "m15": 3, "h1": 3, "d1": 3}
 
 
 def _source(stem: str) -> str:
-    return (
-        GENERATED / f"xauusd_snd_apex_trendguard_{stem}_v{_FILE_VERSION[stem]}.py"
-    ).read_text()
+    return (GENERATED / f"xauusd_snd_apex_trendguard_{stem}_v{_FILE_VERSION[stem]}.py").read_text()
 
 
 def _trending(n: int, start: float, drift: float, step: timedelta) -> pd.DataFrame:
@@ -99,10 +103,14 @@ def _flat_context(strategy) -> MarketContext:
     """A featureless market on every timeframe the strategy asks about."""
     spec = strategy.spec
     steps = {
-        "M1": timedelta(minutes=1), "M5": timedelta(minutes=5),
-        "M15": timedelta(minutes=15), "M30": timedelta(minutes=30),
-        "H1": timedelta(hours=1), "H4": timedelta(hours=4),
-        "D1": timedelta(days=1), "W1": timedelta(weeks=1),
+        "M1": timedelta(minutes=1),
+        "M5": timedelta(minutes=5),
+        "M15": timedelta(minutes=15),
+        "M30": timedelta(minutes=30),
+        "H1": timedelta(hours=1),
+        "H4": timedelta(hours=4),
+        "D1": timedelta(days=1),
+        "W1": timedelta(weeks=1),
     }
     timeframes = {spec.entry_timeframe, *spec.confirmation_timeframes}
     return MarketContext(
@@ -115,6 +123,7 @@ def _flat_context(strategy) -> MarketContext:
 # ─────────────────────────────────────────────────────────────────────
 # The copies really are copies
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _algorithm_fingerprint(source: str) -> list[str]:
     """Every module-level function, unparsed with its docstring dropped —
@@ -163,9 +172,14 @@ def test_params_differ_from_m1_only_where_the_timeframe_forces_it(stem, cls) -> 
     are measured *in bars* or *against a ladder*, so they have to move when
     the bar size does."""
     allowed = {
-        "zone_timeframe", "htf_zone_timeframe", "trend_weights",
-        "trend_ema_fast", "trend_ema_slow", "trend_min_score",
-        "shock_cooldown_bars", "vol_lookback",
+        "zone_timeframe",
+        "htf_zone_timeframe",
+        "trend_weights",
+        "trend_ema_fast",
+        "trend_ema_slow",
+        "trend_min_score",
+        "shock_cooldown_bars",
+        "vol_lookback",
     }
     m1_params = XauusdSndApexTrendguardM1().spec.params
     params = cls().spec.params
@@ -177,6 +191,7 @@ def test_params_differ_from_m1_only_where_the_timeframe_forces_it(stem, cls) -> 
 # ─────────────────────────────────────────────────────────────────────
 # Ladder consistency
 # ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize(("stem", "cls"), FAMILY)
 def test_every_timeframe_it_reads_is_a_timeframe_it_asked_for(stem, cls) -> None:
@@ -223,9 +238,7 @@ def test_trend_votes_are_warm_within_a_backtest_history_buffer(stem, cls) -> Non
 
 
 @pytest.mark.parametrize(("stem", "cls"), FAMILY)
-def test_trend_min_score_sits_between_the_slowest_vote_and_the_whole_ladder(
-    stem, cls
-) -> None:
+def test_trend_min_score_sits_between_the_slowest_vote_and_the_whole_ladder(stem, cls) -> None:
     """The floor the M1 flagship established and every sibling inherits: a
     score above the ladder's maximum would make every trade permanently
     'neutral', while one at or below a *faster* rung's weight would let an
@@ -244,6 +257,7 @@ def test_trend_min_score_sits_between_the_slowest_vote_and_the_whole_ladder(
 # Behaviour
 # ─────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.parametrize(("stem", "cls"), SIBLINGS)
 def test_sibling_is_silent_on_a_featureless_market(stem, cls) -> None:
     assert cls().evaluate(_flat_context(cls())) is None
@@ -256,20 +270,25 @@ def test_sibling_never_buys_a_downtrend(stem, cls) -> None:
     strategy = cls()
     spec = strategy.spec
     steps = {
-        "M5": timedelta(minutes=5), "M15": timedelta(minutes=15),
-        "H1": timedelta(hours=1), "H4": timedelta(hours=4),
-        "D1": timedelta(days=1), "W1": timedelta(weeks=1),
+        "M5": timedelta(minutes=5),
+        "M15": timedelta(minutes=15),
+        "H1": timedelta(hours=1),
+        "H4": timedelta(hours=4),
+        "D1": timedelta(days=1),
+        "W1": timedelta(weeks=1),
     }
     drifts = {
-        "M5": -0.40, "M15": -1.00, "H1": -3.00,
-        "H4": -8.00, "D1": -20.0, "W1": -60.0,
+        "M5": -0.40,
+        "M15": -1.00,
+        "H1": -3.00,
+        "H4": -8.00,
+        "D1": -20.0,
+        "W1": -60.0,
     }
     timeframes = {spec.entry_timeframe, *spec.confirmation_timeframes}
     ctx = MarketContext(
         symbol="XAUUSD",
-        candles={
-            tf: _trending(200, 4200.0, drifts[tf], steps[tf]) for tf in timeframes
-        },
+        candles={tf: _trending(200, 4200.0, drifts[tf], steps[tf]) for tf in timeframes},
         spread_points=18.0,
     )
     for signal in strategy.evaluate(ctx) or ():

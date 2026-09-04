@@ -181,12 +181,20 @@ def _adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     minus_dm = np.where((down > up) & (down > 0), down, 0.0)
     tr = _true_range(df)
     atr_s = tr.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
-    plus_di = 100.0 * pd.Series(plus_dm, index=df.index).ewm(
-        alpha=1.0 / period, adjust=False, min_periods=period
-    ).mean() / atr_s.replace(0.0, np.nan)
-    minus_di = 100.0 * pd.Series(minus_dm, index=df.index).ewm(
-        alpha=1.0 / period, adjust=False, min_periods=period
-    ).mean() / atr_s.replace(0.0, np.nan)
+    plus_di = (
+        100.0
+        * pd.Series(plus_dm, index=df.index)
+        .ewm(alpha=1.0 / period, adjust=False, min_periods=period)
+        .mean()
+        / atr_s.replace(0.0, np.nan)
+    )
+    minus_di = (
+        100.0
+        * pd.Series(minus_dm, index=df.index)
+        .ewm(alpha=1.0 / period, adjust=False, min_periods=period)
+        .mean()
+        / atr_s.replace(0.0, np.nan)
+    )
     denom = (plus_di + minus_di).replace(0.0, np.nan)
     dx = 100.0 * (plus_di - minus_di).abs() / denom
     return dx.ewm(alpha=1.0 / period, adjust=False, min_periods=period).mean()
@@ -229,9 +237,7 @@ def causal_pivots(
     return centre_high.where(is_high), centre_low.where(is_low)
 
 
-def _structure_features(
-    df: pd.DataFrame, atr_s: pd.Series, lookback: int
-) -> dict[str, pd.Series]:
+def _structure_features(df: pd.DataFrame, atr_s: pd.Series, lookback: int) -> dict[str, pd.Series]:
     """Higher-high/lower-low bias, break of structure, and change of character
     — all derived from `causal_pivots`, so all lag reality by `lookback` bars
     exactly as a live reader of the chart would."""
@@ -295,12 +301,8 @@ def _zone_features(
 
     # Shelf thickness: the bar range at the pivot, carried forward with it.
     bar_range = df["high"] - df["low"]
-    demand_height = _safe_div(
-        bar_range.where(piv_low.notna()).ffill(limit=zone_lookback), atr_s
-    )
-    supply_height = _safe_div(
-        bar_range.where(piv_high.notna()).ffill(limit=zone_lookback), atr_s
-    )
+    demand_height = _safe_div(bar_range.where(piv_low.notna()).ffill(limit=zone_lookback), atr_s)
+    supply_height = _safe_div(bar_range.where(piv_high.notna()).ffill(limit=zone_lookback), atr_s)
 
     # Where price sits between the two shelves: -1 hugging demand, +1 hugging
     # supply. Bounded and scale-free by construction.
@@ -473,8 +475,10 @@ def compute_feature_frame(
     out["dist_low_50_atr"] = _safe_div(close - roll_min, atr_safe).clip(0.0, 20.0)
 
     # --- participation ----------------------------------------------------
-    volume = df["tick_volume"].astype(float) if "tick_volume" in df.columns else pd.Series(
-        1.0, index=df.index
+    volume = (
+        df["tick_volume"].astype(float)
+        if "tick_volume" in df.columns
+        else pd.Series(1.0, index=df.index)
     )
     vol_mean_20 = volume.rolling(20, min_periods=20).mean()
     vol_std_20 = volume.rolling(20, min_periods=20).std()
@@ -531,9 +535,7 @@ def compute_feature_frame(
     return frame.replace([np.inf, -np.inf], np.nan)
 
 
-def latest_feature_vector(
-    candles: dict[str, pd.DataFrame], **kwargs: object
-) -> np.ndarray | None:
+def latest_feature_vector(candles: dict[str, pd.DataFrame], **kwargs: object) -> np.ndarray | None:
     """The newest fully-formed feature row, or `None` when warmup is
     incomplete or any feature is undefined.
 

@@ -45,7 +45,9 @@ full setup instructions.
 **Full installation guide:** see [`INSTALL.md`](INSTALL.md) for the
 complete, standalone walkthrough (requirements, every installer prompt,
 Docker, uninstalling, troubleshooting, FAQ). The summary below is the
-short version.
+short version. **Configuring secrets/env vars:** see [`SECRETS.md`](SECRETS.md)
+for every variable this project uses, where to get a real value, and how to
+set it on each platform.
 
 Two install paths, depending on where the MT5 gateway runs:
 

@@ -39,12 +39,11 @@ export const EMPTY_FILTERS: TradeHistoryFilterState = {
 };
 
 export function getDefaultFilters(): TradeHistoryFilterState {
-  const today = getTodayString();
   return {
     ...EMPTY_FILTERS,
-    today: true,
-    openFrom: today,
-    openTo: today,
+    today: false,
+    openFrom: "",
+    openTo: "",
   };
 }
 

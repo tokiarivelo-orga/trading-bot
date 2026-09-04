@@ -89,8 +89,8 @@ export function AnalyticsPage() {
 
   const apiFilters = useMemo(
     () => ({
-      open_from: dateFrom ? Math.floor(Date.parse(`${dateFrom}T00:00:00Z`) / 1000) : undefined,
-      open_to: dateTo ? Math.floor(Date.parse(`${dateTo}T23:59:59Z`) / 1000) : undefined,
+      open_from: dateFrom ? Math.floor(Date.parse(`${dateFrom}T00:00:00`) / 1000) : undefined,
+      open_to: dateTo ? Math.floor(Date.parse(`${dateTo}T23:59:59`) / 1000) : undefined,
     }),
     [dateFrom, dateTo],
   );

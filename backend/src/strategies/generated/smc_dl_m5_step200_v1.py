@@ -204,14 +204,7 @@ class SmcDlM5Step200:
             sl_points=sl_points,
             tp_points=tp_points,
             confidence=confidence,
-            reason=(
-                "OB retest "
-                + zone_note
-                + " sl="
-                + _f(sl_points)
-                + " "
-                + model_note
-            ),
+            reason=("OB retest " + zone_note + " sl=" + _f(sl_points) + " " + model_note),
             zone=PriceZone(
                 kind=ZoneKind.DEMAND if is_buy else ZoneKind.SUPPLY,
                 price_low=candidate["price_low"],
@@ -271,9 +264,7 @@ class SmcDlM5Step200:
             return 0.55, False, "model=unavailable"
 
         try:
-            features_dict = compute_smc_features(
-                ctx.candles, ctx.symbol, lookback=20
-            )
+            features_dict = compute_smc_features(ctx.candles, ctx.symbol, lookback=20)
         except Exception:
             return 0.55, False, "model=feature-err"
 
@@ -298,13 +289,9 @@ class SmcDlM5Step200:
 
         # Veto only when the model is *confidently against* direction:
         if is_buy and bear_p >= veto_threshold and bear_p > bull_p:
-            return tp_p, True, (
-                "model-veto(bear=" + _f(bear_p) + ">=" + _f(veto_threshold) + ")"
-            )
+            return tp_p, True, ("model-veto(bear=" + _f(bear_p) + ">=" + _f(veto_threshold) + ")")
         if (not is_buy) and bull_p >= veto_threshold and bull_p > bear_p:
-            return tp_p, True, (
-                "model-veto(bull=" + _f(bull_p) + ">=" + _f(veto_threshold) + ")"
-            )
+            return tp_p, True, ("model-veto(bull=" + _f(bull_p) + ">=" + _f(veto_threshold) + ")")
 
         return (
             tp_p,

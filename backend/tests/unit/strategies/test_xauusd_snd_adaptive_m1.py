@@ -40,14 +40,14 @@ from src.strategies.sandbox import validate_and_load
 
 CONTEXT_BARS = 200
 _STRATEGY_FILE = (
-    Path(__file__).resolve().parents[3]
-    / "src/strategies/generated/xauusd_snd_adaptive_m1_v1.py"
+    Path(__file__).resolve().parents[3] / "src/strategies/generated/xauusd_snd_adaptive_m1_v1.py"
 )
 
 
 # ─────────────────────────────────────────────────────────────────
 # Synthetic tape
 # ─────────────────────────────────────────────────────────────────
+
 
 def _tape(bars=900, seed=7):
     """A deterministic tape with trend, mean reversion and impulses, so the
@@ -62,22 +62,27 @@ def _tape(bars=900, seed=7):
         spread = abs(rng.normal(0, 0.25)) + 0.12
         open_ = price - rng.normal(0, 0.1)
         close = price
-        rows.append({
-            "time": pd.Timestamp("2026-03-02 00:00", tz=None) + pd.Timedelta(minutes=i),
-            "open": open_,
-            "high": max(open_, close) + spread,
-            "low": min(open_, close) - spread,
-            "close": close,
-            "tick_volume": int(80 + abs(rng.normal(0, 30))),
-        })
+        rows.append(
+            {
+                "time": pd.Timestamp("2026-03-02 00:00", tz=None) + pd.Timedelta(minutes=i),
+                "open": open_,
+                "high": max(open_, close) + spread,
+                "low": min(open_, close) - spread,
+                "close": close,
+                "tick_volume": int(80 + abs(rng.normal(0, 30))),
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def _m15_from(m1):
-    grouped = m1.set_index("time").resample("15min").agg(
-        {"open": "first", "high": "max", "low": "min",
-         "close": "last", "tick_volume": "sum"}
-    ).dropna().reset_index()
+    grouped = (
+        m1.set_index("time")
+        .resample("15min")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "tick_volume": "sum"})
+        .dropna()
+        .reset_index()
+    )
     return grouped
 
 
@@ -87,13 +92,13 @@ def _walk(strategy, m1, m15, spread=25.0, bars=None):
     stop = len(m1) if bars is None else min(len(m1), CONTEXT_BARS + bars)
     m15_times = m15["time"].to_numpy()
     for i in range(CONTEXT_BARS, stop):
-        window = m1.iloc[i - CONTEXT_BARS:i].reset_index(drop=True)
+        window = m1.iloc[i - CONTEXT_BARS : i].reset_index(drop=True)
         cut = int(m15_times.searchsorted(window["time"].iloc[-1].to_datetime64(), "right"))
         ctx = MarketContext(
             symbol="XAUUSD",
             candles={
                 "M1": window,
-                "M15": m15.iloc[max(0, cut - CONTEXT_BARS):cut].reset_index(drop=True),
+                "M15": m15.iloc[max(0, cut - CONTEXT_BARS) : cut].reset_index(drop=True),
             },
             spread_points=spread,
         )
@@ -106,6 +111,7 @@ def _walk(strategy, m1, m15, spread=25.0, bars=None):
 # ─────────────────────────────────────────────────────────────────
 # Contract
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_satisfies_the_strategy_protocol():
     assert isinstance(XauusdSndAdaptiveM1(), Strategy)
@@ -132,25 +138,26 @@ def test_spec_declares_what_the_engine_needs_to_fetch():
 def test_returns_none_without_enough_history():
     strategy = XauusdSndAdaptiveM1()
     tiny = _tape(bars=30)
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={"M1": tiny}, spread_points=20.0)
-    ) is None
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={}, spread_points=20.0)
-    ) is None
+    assert (
+        strategy.evaluate(MarketContext(symbol="XAUUSD", candles={"M1": tiny}, spread_points=20.0))
+        is None
+    )
+    assert strategy.evaluate(MarketContext(symbol="XAUUSD", candles={}, spread_points=20.0)) is None
 
 
 def test_frame_without_a_time_column_is_declined_not_crashed():
     strategy = XauusdSndAdaptiveM1()
     frame = _tape(bars=300).drop(columns=["time"])
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={"M1": frame}, spread_points=20.0)
-    ) is None
+    assert (
+        strategy.evaluate(MarketContext(symbol="XAUUSD", candles={"M1": frame}, spread_points=20.0))
+        is None
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
 # Pure helpers
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_session_boundaries_match_the_engine():
     assert _session_for(13) == "overlap"
@@ -248,6 +255,7 @@ def test_volume_state_is_scale_free_and_survives_a_missing_column():
 # End-to-end over a sliding window
 # ─────────────────────────────────────────────────────────────────
 
+
 def test_walks_a_real_sliding_window_and_emits_wellformed_signals():
     m1 = _tape()
     events = _walk(XauusdSndAdaptiveM1(), m1, _m15_from(m1))
@@ -289,8 +297,9 @@ def test_two_fresh_instances_agree_bar_for_bar():
     second = _walk(XauusdSndAdaptiveM1(), m1, m15)
     assert [b for b, _ in first] == [b for b, _ in second]
     for (_, a), (_, b) in zip(first, second, strict=True):
-        assert [(s.direction, s.sl_points, s.tp_points) for s in a] == \
-               [(s.direction, s.sl_points, s.tp_points) for s in b]
+        assert [(s.direction, s.sl_points, s.tp_points) for s in a] == [
+            (s.direction, s.sl_points, s.tp_points) for s in b
+        ]
 
 
 def test_a_reused_instance_resets_when_the_tape_jumps_to_another_replay():
@@ -361,9 +370,7 @@ def test_skipping_every_session_and_regime_silences_zone_entries():
 def test_signals_carry_learner_reasoning_as_indicator_readings():
     m1 = _tape()
     events = _walk(XauusdSndAdaptiveM1(), m1, _m15_from(m1))
-    zone_events = [
-        s for _b, sigs in events for s in sigs if s.pattern != "CHOCH"
-    ]
+    zone_events = [s for _b, sigs in events for s in sigs if s.pattern != "CHOCH"]
     assert zone_events
     names = {reading.name for reading in zone_events[0].indicators}
     assert {"learner_p_secure", "target_expected_r", "target_p_hit"} <= names
@@ -422,7 +429,5 @@ def test_emitted_signals_clear_the_expectancy_floor():
         for signal in signals:
             if signal.pattern == "CHOCH":
                 continue
-            reading = next(
-                r for r in signal.indicators if r.name == "target_expected_r"
-            )
+            reading = next(r for r in signal.indicators if r.name == "target_expected_r")
             assert reading.value >= floor - 1e-9

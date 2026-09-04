@@ -60,6 +60,7 @@ import { SessionReplayPicker } from './SessionReplayPicker';
 import { SignalsDock } from './SignalsDock';
 import { useBacktestData } from './useBacktestData';
 import { FINER_TIMEFRAME, fetchCandlesForPeriod, TIMEFRAME_SECONDS, useCandleData } from './useCandleData';
+import { useCandleGaps } from './useCandleGaps';
 import { fetchShared } from './sharedFetchCache';
 import { useChartEngine } from './useChartEngine';
 import { useChartUIToggles } from './useChartUIToggles';
@@ -839,6 +840,16 @@ export function ChartPanel({
     switchingChart,
     newsBands,
   } = chartRenderController;
+
+  const candleGaps = useCandleGaps({
+    accountId,
+    symbol,
+    timeframe,
+    candlesRef,
+    reloadWindow: chartRenderController.reloadWindow,
+    switchingChart,
+    loadingMore,
+  });
 
   useEffect(() => {
     if (sharedReplay?.active && sharedReplay.cursorTime != null) {
@@ -1826,7 +1837,7 @@ export function ChartPanel({
       closeTime: t.close_time as UTCTimestamp,
       closePrice: t.close_price,
       closeColor: orderLineStyle.customColors ? orderLineStyle.closeColor : accentColor,
-      closeLabel: `${t.profit >= 0 ? '+' : ''}${t.profit.toFixed(2)} @ ${t.close_price}`,
+      closeLabel: `CLOSE @ ${t.close_price}`,
     };
   }
 
@@ -1901,7 +1912,7 @@ export function ChartPanel({
         key: 'history-close',
         price: t.close_price,
         color: accentColor,
-        leftLabel: `${(t.profit ?? 0) >= 0 ? '+' : ''}${(t.profit ?? 0).toFixed(2)} @ ${t.close_price}`,
+        leftLabel: `CLOSE @ ${t.close_price}`,
       });
     }
     return specs;
@@ -2023,11 +2034,11 @@ export function ChartPanel({
     onToggleOrderLineSettings: () => setShowOrderLineSettings((v) => !v),
     showZoneColorSettings,
     onToggleZoneColorSettings: () => setShowZoneColorSettings((v) => !v),
-    candleGapCount: 0,
-    candleGapMissingBars: 0,
-    candleGapRepairing: false,
-    candleGapResult: null,
-    onRepairCandleGaps: () => {},
+    candleGapCount: candleGaps.gaps.length,
+    candleGapMissingBars: candleGaps.missingBars,
+    candleGapRepairing: candleGaps.repairing,
+    candleGapResult: candleGaps.result,
+    onRepairCandleGaps: candleGaps.repair,
     backtestReportId,
     sessionReplayPeriod,
     showSessionReplayPicker,
@@ -2082,6 +2093,10 @@ export function ChartPanel({
     chartRenderController.spreadPoints,
     volatilityGuard.config?.enabled,
     volatilityGuard.isSaving,
+    candleGaps.gaps.length,
+    candleGaps.missingBars,
+    candleGaps.repairing,
+    candleGaps.result,
   ]);
 
   const onReplayUIChangeRef = useRef(onReplayUIChange);
@@ -2128,9 +2143,7 @@ export function ChartPanel({
             currentTime:
               candlesRef.current[replayCursorIndex]
                 ? new Date(candlesRef.current[replayCursorIndex].time * 1000)
-                    .toISOString()
-                    .replace('T', ' ')
-                    .slice(0, 19)
+                    .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
                 : '—',
             onSeek: (index) => {
               setReplayPlaying(false);
@@ -2225,14 +2238,10 @@ export function ChartPanel({
           <span>
             Session replay —{' '}
             {new Date(sessionReplayPeriod.from * 1000)
-              .toISOString()
-              .replace('T', ' ')
-              .slice(0, 16)}{' '}
+              .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}{' '}
             →{' '}
             {new Date(sessionReplayPeriod.to * 1000)
-              .toISOString()
-              .replace('T', ' ')
-              .slice(0, 16)}
+              .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
             {sessionReplayLoadingPage &&
               ` — loading… page ${sessionReplayLoadingPage.page} (${sessionReplayLoadingPage.loaded.toLocaleString()} candles so far)`}
           </span>
@@ -2355,9 +2364,7 @@ export function ChartPanel({
           currentTime={
             candlesRef.current[replayCursorIndex]
               ? new Date(candlesRef.current[replayCursorIndex].time * 1000)
-                  .toISOString()
-                  .replace('T', ' ')
-                  .slice(0, 19)
+                  .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
               : '—'
           }
           onSeek={(index) => {

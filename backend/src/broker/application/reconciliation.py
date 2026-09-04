@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from src.broker.domain.account import BrokerUnavailable
 from src.broker.domain.trading import Side
@@ -35,14 +37,32 @@ from src.shared.events.definitions import PositionClosed, PositionOpened
 
 logger = logging.getLogger(__name__)
 
+# How long a ticket logs its "no close history" WARNING loudly (persisted to
+# the activity log) before `_log_unresolved` downgrades it to DEBUG, and how
+# often it gets one WARNING reminder after that — see `_log_unresolved`.
+_LOUD_RETRY_WINDOW = timedelta(minutes=10)
+_QUIET_REMINDER_INTERVAL = timedelta(minutes=30)
+
 
 class ReconciliationService:
     def __init__(
-        self, broker: BrokerPort, journal: TradeJournalService, event_bus: EventBus
+        self,
+        broker: BrokerPort,
+        journal: TradeJournalService,
+        event_bus: EventBus,
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._broker = broker
         self._journal = journal
         self._event_bus = event_bus
+        self._clock = clock
+        # ticket_id -> when it was first seen unresolved / last logged loudly.
+        # Cleared whenever a ticket resolves (see `_close_from_history`) so a
+        # ticket that goes stale, resolves, then later goes stale again
+        # (unlikely but not impossible) gets a fresh loud window rather than
+        # inheriting a stale timestamp from its first go-round.
+        self._unresolved_since: dict[str, datetime] = {}
+        self._last_loud_log: dict[str, datetime] = {}
 
     async def reconcile_all(self) -> None:
         open_trades = await self._journal.get_open_trades()
@@ -143,16 +163,15 @@ class ReconciliationService:
                 ticket_id,
                 symbol,
             )
+            self._unresolved_since.pop(ticket_id, None)
+            self._last_loud_log.pop(ticket_id, None)
             return
         info = await self._broker.get_close_info(int(ticket_id))
         if info is None:
-            logger.warning(
-                "reconciliation: no close history for ticket=%s symbol=%s — still unresolved, "
-                "will retry next reconciliation pass",
-                ticket_id,
-                symbol,
-            )
+            self._log_unresolved(ticket_id, symbol)
             return
+        self._unresolved_since.pop(ticket_id, None)
+        self._last_loud_log.pop(ticket_id, None)
         await self._event_bus.publish(
             PositionClosed(
                 symbol=symbol,
@@ -167,4 +186,46 @@ class ReconciliationService:
             ticket_id,
             symbol,
             info.profit,
+        )
+
+    def _log_unresolved(self, ticket_id: str, symbol: str) -> None:
+        """Logs a ticket the broker still has no close history for.
+
+        WARNING (persisted to the activity log) for the first
+        `_LOUD_RETRY_WINDOW` after first seen — plenty of time to notice a
+        genuine late-syncing MT5 deal history, which in practice always
+        resolves within minutes of a gateway reconnect. Past that window,
+        a ticket that still won't resolve isn't a transient sync race —
+        it's permanently unresolvable (root-caused 2026-08-20: a stale
+        paper-mode position id — see `PaperBroker`'s `itertools.count(1)`
+        ticket counter — left open in the journal from before the account
+        switched to its live gateway, which of course has no MT5 deal
+        history for a ticket number MT5 never issued). Since `reconcile_all`
+        retries every few seconds forever (`ReconciliationPoller`), logging
+        every attempt at WARNING floods the activity log for as long as the
+        ticket stays stuck — one real incident produced ~20k WARNING rows
+        in under 4 hours from a single ticket. Downgraded to DEBUG (dropped
+        by the default INFO log level) after the loud window, with one
+        WARNING reminder every `_QUIET_REMINDER_INTERVAL` so a permanently
+        stuck ticket doesn't go completely invisible — it still needs a
+        human to close it out (delete/adjust the journal row) since it can
+        never resolve on its own."""
+        now = self._clock()
+        first_seen = self._unresolved_since.setdefault(ticket_id, now)
+        age = now - first_seen
+        last_loud = self._last_loud_log.get(ticket_id)
+        loud = (
+            age < _LOUD_RETRY_WINDOW
+            or last_loud is None
+            or now - last_loud >= _QUIET_REMINDER_INTERVAL
+        )
+        log = logger.warning if loud else logger.debug
+        if loud:
+            self._last_loud_log[ticket_id] = now
+        log(
+            "reconciliation: no close history for ticket=%s symbol=%s (unresolved for %s) — "
+            "still unresolved, will retry next reconciliation pass",
+            ticket_id,
+            symbol,
+            age,
         )

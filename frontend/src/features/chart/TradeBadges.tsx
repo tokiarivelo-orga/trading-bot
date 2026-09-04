@@ -87,6 +87,20 @@ export const TradeBadges = memo(function TradeBadges({ chart, series, trades, ca
         const displayCount = count > 9 ? '+9' : String(count);
         const yOffset = p.side === 'buy' ? 24 : -44; // Position below low or above high
 
+        const wins = p.group.filter((t) => t.profit != null && t.profit > 0).length;
+        const losses = p.group.filter((t) => t.profit != null && t.profit < 0).length;
+        const winPct = (wins / count) * 100;
+        const lossPct = (losses / count) * 100;
+        
+        const winEnd = winPct;
+        const lossEnd = winPct + lossPct;
+        
+        const baseColor = p.side === 'buy' ? 'var(--color-buy)' : 'var(--color-sell)';
+        // Draw the border ring: green for profit, red for loss, default side color for open/breakeven
+        const ringGradient = (wins > 0 || losses > 0)
+          ? `conic-gradient(var(--color-ok) 0% ${winEnd}%, var(--color-err) ${winEnd}% ${lossEnd}%, ${baseColor} ${lossEnd}% 100%)`
+          : `conic-gradient(${baseColor} 0% 100%)`;
+
         return (
           <div
             key={`${p.x}-${p.y}-${i}`}
@@ -94,18 +108,19 @@ export const TradeBadges = memo(function TradeBadges({ chart, series, trades, ca
               e.stopPropagation();
               onClick(p.x, e.clientY, p.group);
             }}
-            className={`absolute z-20 flex items-center justify-center rounded-full text-[11px] font-bold shadow-md cursor-pointer hover:scale-110 transition-transform ${
-              p.side === 'buy' ? 'bg-buy text-panel border border-buy' : 'bg-sell text-panel border border-sell'
-            }`}
+            className="absolute z-20 flex items-center justify-center rounded-full cursor-pointer hover:scale-110 transition-transform shadow-md"
             style={{
-              left: p.x - 10, // Center horizontally
-              top: p.y + yOffset,
-              width: 20,
-              height: 20,
+              left: p.x - 12, // Center horizontally (width 24 / 2)
+              top: p.y + yOffset - 2, // Adjust slightly for height increase from 20 to 24
+              width: 24,
+              height: 24,
+              background: ringGradient,
             }}
             title={`${count} ${p.side.toUpperCase()} order(s)`}
           >
-            {displayCount}
+            <div className={`w-[20px] h-[20px] rounded-full flex items-center justify-center text-[11px] font-bold ${p.side === 'buy' ? 'bg-buy text-panel' : 'bg-sell text-panel'}`}>
+              {displayCount}
+            </div>
           </div>
         );
       })}

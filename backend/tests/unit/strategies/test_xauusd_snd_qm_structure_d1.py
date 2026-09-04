@@ -185,8 +185,26 @@ def test_detect_zones_v1_finds_rbr_demand_zone() -> None:
 
 def test_detect_quasimodo_zones_finds_bullish_failure_swing() -> None:
     seq = [
-        100, 99, 98, 95, 96, 98, 100, 102, 105, 103,
-        100, 98, 97, 99, 101, 103, 100, 101, 102, 103,
+        100,
+        99,
+        98,
+        95,
+        96,
+        98,
+        100,
+        102,
+        105,
+        103,
+        100,
+        98,
+        97,
+        99,
+        101,
+        103,
+        100,
+        101,
+        102,
+        103,
     ]
     bars = [_bar(i, p, p + 0.3, p - 0.3, p) for i, p in enumerate(seq)]
     df = pd.DataFrame(bars)

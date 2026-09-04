@@ -7,6 +7,7 @@ v2 adds two live-safety gates over the active v1 (see that file's module
 docstring for the 2026-08-17 over-trading incident this fixes): a hard
 `ctx.own_position is not None` guard, and a `fresh_touch` requirement so a
 zone only signals on the entry-TF bar price first enters it."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -184,8 +185,26 @@ def test_detect_zones_v1_finds_rbr_demand_zone() -> None:
 
 def test_detect_quasimodo_zones_finds_bullish_failure_swing() -> None:
     seq = [
-        100, 99, 98, 95, 96, 98, 100, 102, 105, 103,
-        100, 98, 97, 99, 101, 103, 100, 101, 102, 103,
+        100,
+        99,
+        98,
+        95,
+        96,
+        98,
+        100,
+        102,
+        105,
+        103,
+        100,
+        98,
+        97,
+        99,
+        101,
+        103,
+        100,
+        101,
+        102,
+        103,
     ]
     bars = [_bar(i, p, p + 0.3, p - 0.3, p) for i, p in enumerate(seq)]
     df = pd.DataFrame(bars)

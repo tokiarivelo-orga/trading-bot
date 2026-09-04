@@ -111,6 +111,7 @@ _RESET_GAP_NS = 30 * 24 * 60 * _NS_PER_MINUTE
 # Indicator helpers
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _true_range(df):
     prev_close = df["close"].shift(1)
     return pd.concat(
@@ -187,6 +188,7 @@ def _engulfing_flags(opens, closes):
 # Resampling: bucket entry-TF candles into zone-TF bars
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _resample(df, tf_minutes, entry_tf_minutes):
     """Bucket entry-TF rows into tf_minutes OHLC bars (numpy reduceat).
     Returns (zone_frame, zone_end_ns) or None. The trailing bucket is dropped
@@ -228,6 +230,7 @@ def _resample(df, tf_minutes, entry_tf_minutes):
 # Supply & Demand V1: classic leg-base-leg (RBR/DBD/RBD/DBR)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _classify_bars(closes, opens, atr_filled, base_mult):
     body = np.abs(closes - opens)
     return np.where(body <= base_mult * atr_filled, 0, np.where(closes >= opens, 1, -1))
@@ -248,6 +251,7 @@ def _make_is_leg(closes, opens, atr_filled, leg_mult):
     def is_leg(run):
         cls, start, end = run
         return cls != 0 and abs(closes[end] - opens[start]) >= leg_mult * atr_filled[end]
+
     return is_leg
 
 
@@ -263,7 +267,7 @@ def _merge_weak_runs(runs, is_leg, max_base):
                 continue
             if is_leg(d1) and is_leg(d2):
                 continue
-            runs[k: k + 3] = [[d1[0], d1[1], d2[2]]]
+            runs[k : k + 3] = [[d1[0], d1[1], d2[2]]]
             merged = True
             break
     return runs
@@ -303,8 +307,8 @@ def _detect_zones_v1(df, atr_series, params):
         base_count = base_end - base_start + 1
         if base_count < 1 or base_count > max_base:
             continue
-        price_high = float(highs[base_start: base_end + 1].max())
-        price_low = float(lows[base_start: base_end + 1].min())
+        price_high = float(highs[base_start : base_end + 1].max())
+        price_low = float(lows[base_start : base_end + 1].min())
         leg_out_up = leg_out[0] == 1
         conf_idx = None
         for j in range(leg_out[1], leg_out[2] + 1):
@@ -319,24 +323,27 @@ def _detect_zones_v1(df, atr_series, params):
         else:
             pattern = "DBR" if leg_out_up else "DBD"
         impulse = abs(closes[leg_out[2]] - opens[leg_out[1]])
-        zones.append({
-            "source": "SND_V1",
-            "family": "SND_V1_" + pattern,
-            "pattern": pattern,
-            "kind": ZoneKind.DEMAND if leg_out_up else ZoneKind.SUPPLY,
-            "price_high": price_high,
-            "price_low": price_low,
-            "base_start": base_start,
-            "conf_idx": conf_idx,
-            "leg_out_end": leg_out[2],
-            "impulse_atr": float(impulse / max(atr_filled[leg_out[2]], 1e-9)),
-        })
+        zones.append(
+            {
+                "source": "SND_V1",
+                "family": "SND_V1_" + pattern,
+                "pattern": pattern,
+                "kind": ZoneKind.DEMAND if leg_out_up else ZoneKind.SUPPLY,
+                "price_high": price_high,
+                "price_low": price_low,
+                "base_start": base_start,
+                "conf_idx": conf_idx,
+                "leg_out_end": leg_out[2],
+                "impulse_atr": float(impulse / max(atr_filled[leg_out[2]], 1e-9)),
+            }
+        )
     return zones
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Supply & Demand V2: engulfing-base departure zones
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _detect_zones_v2(df, atr_series, params):
     """A strong engulfing candle creates the zone edge, small-body candles
@@ -379,36 +386,40 @@ def _detect_zones_v2(df, atr_series, params):
         if dep_idx >= n:
             break
 
-        price_high = float(max(highs[i], highs[base_start: base_end].max()))
-        price_low = float(min(lows[i], lows[base_start: base_end].min()))
+        price_high = float(max(highs[i], highs[base_start:base_end].max()))
+        price_low = float(min(lows[i], lows[base_start:base_end].min()))
         impulse = float(body / max(atr_filled[i], 1e-9))
 
         if bullish and closes[dep_idx] > price_high:
-            zones.append({
-                "source": "SND_V2",
-                "family": "SND_V2",
-                "pattern": "DZ_V2",
-                "kind": ZoneKind.DEMAND,
-                "price_high": price_high,
-                "price_low": price_low,
-                "base_start": base_start,
-                "conf_idx": dep_idx,
-                "leg_out_end": dep_idx,
-                "impulse_atr": impulse,
-            })
+            zones.append(
+                {
+                    "source": "SND_V2",
+                    "family": "SND_V2",
+                    "pattern": "DZ_V2",
+                    "kind": ZoneKind.DEMAND,
+                    "price_high": price_high,
+                    "price_low": price_low,
+                    "base_start": base_start,
+                    "conf_idx": dep_idx,
+                    "leg_out_end": dep_idx,
+                    "impulse_atr": impulse,
+                }
+            )
         elif (not bullish) and closes[dep_idx] < price_low:
-            zones.append({
-                "source": "SND_V2",
-                "family": "SND_V2",
-                "pattern": "SZ_V2",
-                "kind": ZoneKind.SUPPLY,
-                "price_high": price_high,
-                "price_low": price_low,
-                "base_start": base_start,
-                "conf_idx": dep_idx,
-                "leg_out_end": dep_idx,
-                "impulse_atr": impulse,
-            })
+            zones.append(
+                {
+                    "source": "SND_V2",
+                    "family": "SND_V2",
+                    "pattern": "SZ_V2",
+                    "kind": ZoneKind.SUPPLY,
+                    "price_high": price_high,
+                    "price_low": price_low,
+                    "base_start": base_start,
+                    "conf_idx": dep_idx,
+                    "leg_out_end": dep_idx,
+                    "impulse_atr": impulse,
+                }
+            )
         i = dep_idx + 1
 
     return zones
@@ -418,16 +429,17 @@ def _detect_zones_v2(df, atr_series, params):
 # Swing points & market structure (HH / HL / LH / LL)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _detect_swing_points(highs, lows, lookback):
     """Swing highs/lows by strict N-bar dominance. Strict (a unique extreme
     in the window) so a flat shelf does not print a swing on every bar."""
     n = len(highs)
     swings = []
     for i in range(lookback, n - lookback):
-        window_highs = highs[i - lookback: i + lookback + 1]
+        window_highs = highs[i - lookback : i + lookback + 1]
         if highs[i] == window_highs.max() and sum(window_highs == highs[i]) == 1:
             swings.append((i, float(highs[i]), "high"))
-        window_lows = lows[i - lookback: i + lookback + 1]
+        window_lows = lows[i - lookback : i + lookback + 1]
         if lows[i] == window_lows.min() and sum(window_lows == lows[i]) == 1:
             swings.append((i, float(lows[i]), "low"))
     swings.sort(key=lambda x: x[0])
@@ -488,6 +500,7 @@ def _band_around(idx, highs, lows, ext, atr_at, max_atr_mult):
 # Strong support / resistance levels (SnR)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _strong_levels(swings, atr_val, tol_mult, min_touches):
     """Cluster swing extremes that sit within `tol_mult` x ATR of each other;
     a cluster of `min_touches` or more is a *strong* level. This is the
@@ -502,11 +515,7 @@ def _strong_levels(swings, atr_val, tol_mult, min_touches):
             clusters[-1].append(price)
         else:
             clusters.append([price])
-    return [
-        (float(np.mean(c)), len(c))
-        for c in clusters
-        if len(c) >= min_touches
-    ]
+    return [(float(np.mean(c)), len(c)) for c in clusters if len(c) >= min_touches]
 
 
 def _at_strong_level(levels, price_low, price_high, tol):
@@ -517,6 +526,7 @@ def _at_strong_level(levels, price_low, price_high, tol):
 # ─────────────────────────────────────────────────────────────────────
 # Two-point trendline confluence
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _trendline_touch(swings, kind, target_idx, price_low, price_high, tol, max_pairs):
     """True when a line drawn through two recent same-kind swings passes
@@ -549,6 +559,7 @@ def _trendline_touch(swings, kind, target_idx, price_low, price_high, tol, max_p
 # Quasimodo family: QMR / QML, QMC, QM2P, QMM
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _detect_quasimodo_legacy(df, atr_series, params):
     """The baseline bot's swing-failure Quasimodo, kept verbatim under its
     own family label so an A/B against `xauusd_snd_qm_structure_fixed_m1`
@@ -573,30 +584,40 @@ def _detect_quasimodo_legacy(df, atr_series, params):
         atr_at = atr_filled[min(s3[0], len(atr_filled) - 1)]
 
         bullish = (
-            s1[2] == "low" and s2[2] == "high" and s3[2] == "low" and s4[2] == "high"
-            and s3[1] < s1[1] and s4[1] < s2[1]
+            s1[2] == "low"
+            and s2[2] == "high"
+            and s3[2] == "low"
+            and s4[2] == "high"
+            and s3[1] < s1[1]
+            and s4[1] < s2[1]
             and abs(s2[1] - s3[1]) >= min_swing_atr * atr_at
         )
         bearish = (
-            s1[2] == "high" and s2[2] == "low" and s3[2] == "high" and s4[2] == "low"
-            and s3[1] > s1[1] and s4[1] > s2[1]
+            s1[2] == "high"
+            and s2[2] == "low"
+            and s3[2] == "high"
+            and s4[2] == "low"
+            and s3[1] > s1[1]
+            and s4[1] > s2[1]
             and abs(s3[1] - s2[1]) >= min_swing_atr * atr_at
         )
         if not (bullish or bearish):
             continue
         low, high = _band_around(s3[0], highs, lows, ext, atr_at, max_height_mult)
-        zones.append({
-            "source": "QUASIMODO",
-            "family": "QM_LEGACY",
-            "pattern": "QM_BULL" if bullish else "QM_BEAR",
-            "kind": ZoneKind.DEMAND if bullish else ZoneKind.SUPPLY,
-            "price_high": high,
-            "price_low": low,
-            "base_start": s3[0],
-            "conf_idx": s4[0],
-            "leg_out_end": s4[0],
-            "impulse_atr": float(abs(s3[1] - s2[1]) / max(atr_at, 1e-9)),
-        })
+        zones.append(
+            {
+                "source": "QUASIMODO",
+                "family": "QM_LEGACY",
+                "pattern": "QM_BULL" if bullish else "QM_BEAR",
+                "kind": ZoneKind.DEMAND if bullish else ZoneKind.SUPPLY,
+                "price_high": high,
+                "price_low": low,
+                "base_start": s3[0],
+                "conf_idx": s4[0],
+                "leg_out_end": s4[0],
+                "impulse_atr": float(abs(s3[1] - s2[1]) / max(atr_at, 1e-9)),
+            }
+        )
     return zones
 
 
@@ -637,22 +658,29 @@ def _detect_quasimodo_family(df, atr_series, params, swings, trend_dir):
     zones = []
     for idx in range(len(swings) - 3):
         shoulder, neck, head, breaker = (
-            swings[idx], swings[idx + 1], swings[idx + 2], swings[idx + 3]
+            swings[idx],
+            swings[idx + 1],
+            swings[idx + 2],
+            swings[idx + 3],
         )
         atr_at = atr_filled[min(head[0], len(atr_filled) - 1)]
         if atr_at <= 0:
             continue
 
         bearish = (
-            shoulder[2] == "high" and neck[2] == "low"
-            and head[2] == "high" and breaker[2] == "low"
-            and head[1] > shoulder[1]      # head above the left shoulder
-            and breaker[1] < neck[1]       # neckline broken
+            shoulder[2] == "high"
+            and neck[2] == "low"
+            and head[2] == "high"
+            and breaker[2] == "low"
+            and head[1] > shoulder[1]  # head above the left shoulder
+            and breaker[1] < neck[1]  # neckline broken
             and (head[1] - neck[1]) >= min_head_atr * atr_at
         )
         bullish = (
-            shoulder[2] == "low" and neck[2] == "high"
-            and head[2] == "low" and breaker[2] == "high"
+            shoulder[2] == "low"
+            and neck[2] == "high"
+            and head[2] == "low"
+            and breaker[2] == "high"
             and head[1] < shoulder[1]
             and breaker[1] > neck[1]
             and (neck[1] - head[1]) >= min_head_atr * atr_at
@@ -676,19 +704,21 @@ def _detect_quasimodo_family(df, atr_series, params, swings, trend_dir):
         else:
             family = "QMR" if bearish else "QML"
 
-        zones.append({
-            "source": "QUASIMODO",
-            "family": family,
-            "pattern": family,
-            "kind": kind,
-            "price_high": high,
-            "price_low": low,
-            "base_start": shoulder[0],
-            "conf_idx": breaker[0],
-            "leg_out_end": breaker[0],
-            "impulse_atr": float(abs(head[1] - neck[1]) / max(atr_at, 1e-9)),
-            "needs_htf": False,
-        })
+        zones.append(
+            {
+                "source": "QUASIMODO",
+                "family": family,
+                "pattern": family,
+                "kind": kind,
+                "price_high": high,
+                "price_low": low,
+                "base_start": shoulder[0],
+                "conf_idx": breaker[0],
+                "leg_out_end": breaker[0],
+                "impulse_atr": float(abs(head[1] - neck[1]) / max(atr_at, 1e-9)),
+                "needs_htf": False,
+            }
+        )
 
         # ── QMM: the same structure once the shoulder line has failed ──
         # A close beyond the shoulder band in the direction the QMR said it
@@ -703,25 +733,28 @@ def _detect_quasimodo_family(df, atr_series, params, swings, trend_dir):
         if len(failed) == 0:
             continue
         fail_idx = int(failed[0]) + fail_from
-        zones.append({
-            "source": "QUASIMODO",
-            "family": "QMM",
-            "pattern": "QMM",
-            "kind": ZoneKind.DEMAND if bearish else ZoneKind.SUPPLY,
-            "price_high": high,
-            "price_low": low,
-            "base_start": shoulder[0],
-            "conf_idx": fail_idx,
-            "leg_out_end": fail_idx,
-            "impulse_atr": float(abs(head[1] - neck[1]) / max(atr_at, 1e-9)),
-            "needs_htf": True,
-        })
+        zones.append(
+            {
+                "source": "QUASIMODO",
+                "family": "QMM",
+                "pattern": "QMM",
+                "kind": ZoneKind.DEMAND if bearish else ZoneKind.SUPPLY,
+                "price_high": high,
+                "price_low": low,
+                "base_start": shoulder[0],
+                "conf_idx": fail_idx,
+                "leg_out_end": fail_idx,
+                "impulse_atr": float(abs(head[1] - neck[1]) / max(atr_at, 1e-9)),
+                "needs_htf": True,
+            }
+        )
     return zones
 
 
 # ─────────────────────────────────────────────────────────────────────
 # SNRC — SnR continuation setups
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _upgrade_snrc(zones, levels, atr_val, params):
     """Re-label V1 bases that sit on a strong SnR level.
@@ -785,40 +818,43 @@ def _detect_snrc3(df, atr_series, params, levels, bull_engulf, bear_engulf):
             stop = min(n, i + 1 + max_wait)
             # Failure = a close back through the engulfing candle's far side.
             if failed_bull:
-                broke = np.flatnonzero(closes[i + 1: stop] < lows[i])
+                broke = np.flatnonzero(closes[i + 1 : stop] < lows[i])
             else:
-                broke = np.flatnonzero(closes[i + 1: stop] > highs[i])
+                broke = np.flatnonzero(closes[i + 1 : stop] > highs[i])
             if len(broke) == 0:
                 continue
             fail_idx = int(broke[0]) + i + 1
             # The entry is the opposite engulfing on the same line.
             counter = bear_engulf if failed_bull else bull_engulf
-            candidates = np.flatnonzero(counter[fail_idx: min(n, fail_idx + max_wait)])
+            candidates = np.flatnonzero(counter[fail_idx : min(n, fail_idx + max_wait)])
             if len(candidates) == 0:
                 continue
             entry_idx = int(candidates[0]) + fail_idx
             if not _at_strong_level(levels, lows[entry_idx], highs[entry_idx], tol):
                 continue
             low, high = _band_around(entry_idx, highs, lows, 0, atr_at, max_height_mult)
-            zones.append({
-                "source": "SNRC3",
-                "family": "SNRC3",
-                "pattern": "SNRC3",
-                "kind": ZoneKind.SUPPLY if failed_bull else ZoneKind.DEMAND,
-                "price_high": high,
-                "price_low": low,
-                "base_start": i,
-                "conf_idx": entry_idx,
-                "leg_out_end": entry_idx,
-                "impulse_atr": float(abs(closes[entry_idx] - closes[i]) / max(atr_at, 1e-9)),
-                "needs_htf": False,
-            })
+            zones.append(
+                {
+                    "source": "SNRC3",
+                    "family": "SNRC3",
+                    "pattern": "SNRC3",
+                    "kind": ZoneKind.SUPPLY if failed_bull else ZoneKind.DEMAND,
+                    "price_high": high,
+                    "price_low": low,
+                    "base_start": i,
+                    "conf_idx": entry_idx,
+                    "leg_out_end": entry_idx,
+                    "impulse_atr": float(abs(closes[entry_idx] - closes[i]) / max(atr_at, 1e-9)),
+                    "needs_htf": False,
+                }
+            )
     return zones
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Liquidity sweep / stop hunt
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _detect_sweep_zones(df, atr_series, params, swings):
     """Price wicks through a prior swing extreme — taking the stops resting
@@ -843,34 +879,38 @@ def _detect_sweep_zones(df, atr_series, params, swings):
                 continue
             pierce = min_pierce * atr_at
             if kind == "low" and lows[j] < swing_price - pierce and closes[j] > swing_price:
-                zones.append({
-                    "source": "SWEEP",
-                    "family": "SWEEP",
-                    "pattern": "SWEEP_LOW",
-                    "kind": ZoneKind.DEMAND,
-                    "price_high": float(swing_price),
-                    "price_low": float(lows[j]),
-                    "base_start": swing_idx,
-                    "conf_idx": j,
-                    "leg_out_end": j,
-                    "impulse_atr": float((swing_price - lows[j]) / atr_at),
-                    "needs_htf": False,
-                })
+                zones.append(
+                    {
+                        "source": "SWEEP",
+                        "family": "SWEEP",
+                        "pattern": "SWEEP_LOW",
+                        "kind": ZoneKind.DEMAND,
+                        "price_high": float(swing_price),
+                        "price_low": float(lows[j]),
+                        "base_start": swing_idx,
+                        "conf_idx": j,
+                        "leg_out_end": j,
+                        "impulse_atr": float((swing_price - lows[j]) / atr_at),
+                        "needs_htf": False,
+                    }
+                )
                 break
             if kind == "high" and highs[j] > swing_price + pierce and closes[j] < swing_price:
-                zones.append({
-                    "source": "SWEEP",
-                    "family": "SWEEP",
-                    "pattern": "SWEEP_HIGH",
-                    "kind": ZoneKind.SUPPLY,
-                    "price_high": float(highs[j]),
-                    "price_low": float(swing_price),
-                    "base_start": swing_idx,
-                    "conf_idx": j,
-                    "leg_out_end": j,
-                    "impulse_atr": float((highs[j] - swing_price) / atr_at),
-                    "needs_htf": False,
-                })
+                zones.append(
+                    {
+                        "source": "SWEEP",
+                        "family": "SWEEP",
+                        "pattern": "SWEEP_HIGH",
+                        "kind": ZoneKind.SUPPLY,
+                        "price_high": float(highs[j]),
+                        "price_low": float(swing_price),
+                        "base_start": swing_idx,
+                        "conf_idx": j,
+                        "leg_out_end": j,
+                        "impulse_atr": float((highs[j] - swing_price) / atr_at),
+                        "needs_htf": False,
+                    }
+                )
                 break
     return zones
 
@@ -878,6 +918,7 @@ def _detect_sweep_zones(df, atr_series, params, swings):
 # ─────────────────────────────────────────────────────────────────────
 # Zone lifecycle on the entry timeframe
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _track_zone(zone, start_ns, entry_t_ns, highs, lows, closes):
     """Follow one zone forward on entry-TF bars from the moment it became
@@ -894,9 +935,7 @@ def _track_zone(zone, start_ns, entry_t_ns, highs, lows, closes):
         return None
 
     demand = zone["kind"] == ZoneKind.DEMAND
-    breached = (
-        closes[start:] < zone["price_low"] if demand else closes[start:] > zone["price_high"]
-    )
+    breached = closes[start:] < zone["price_low"] if demand else closes[start:] > zone["price_high"]
     break_off = int(np.argmax(breached)) if bool(breached.any()) else -1
     end = start + break_off if break_off >= 0 else n
 
@@ -934,9 +973,7 @@ def _flip_to_breaker(zone, break_ns):
     own ("Blindspot"), so it is traded only on the retest and carries its own
     family label for the learner to judge separately."""
     flipped = dict(zone)
-    flipped["kind"] = (
-        ZoneKind.SUPPLY if zone["kind"] == ZoneKind.DEMAND else ZoneKind.DEMAND
-    )
+    flipped["kind"] = ZoneKind.SUPPLY if zone["kind"] == ZoneKind.DEMAND else ZoneKind.DEMAND
     flipped["source"] = "BREAKER"
     flipped["family"] = "BREAKER"
     flipped["pattern"] = "BREAKER_" + str(zone.get("pattern", ""))
@@ -948,6 +985,7 @@ def _flip_to_breaker(zone, break_ns):
 # ─────────────────────────────────────────────────────────────────────
 # Regime classification
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _volatility_bucket(atr_values, params):
     """Where current ATR sits in its own trailing distribution — 0 quiet,
@@ -1099,6 +1137,7 @@ def _prior_logit(pattern, session, volatility, trend, known_family):
 # Sessions and volume
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _session_for(hour):
     """UTC-hour trading session, matching `engine.domain.regime.session_for`
     boundaries so a session name means the same thing here as in the journal
@@ -1140,6 +1179,7 @@ def _volume_state(df, params):
 # ─────────────────────────────────────────────────────────────────────
 # Change of character (CHoCH)
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _detect_choch(structure, closes, atr_val, params):
     """Has the market just changed character against the prevailing swing
@@ -1309,6 +1349,7 @@ def _build_features(
 # Strategy
 # ─────────────────────────────────────────────────────────────────────
 
+
 class XauusdSndAdaptiveM1:
     def __init__(self):
         self.spec = StrategySpec(
@@ -1328,7 +1369,6 @@ class XauusdSndAdaptiveM1:
                 "zone_tf_minutes": 5,
                 "entry_tf_minutes": 1,
                 "htf_key": "M15",
-
                 # ── Zone detection ──
                 "atr_period": 14,
                 "atr_slow_period": 50,
@@ -1337,13 +1377,11 @@ class XauusdSndAdaptiveM1:
                 "max_base_candles": 6,
                 "v2_max_base_candles": 4,
                 "v2_engulf_min_atr_mult": 1.0,
-
                 # ── Quasimodo ──
                 "qm_swing_lookback": 3,
                 "qm_min_swing_atr": 0.5,
                 "qm_min_head_atr_mult": 0.4,
                 "qm_zone_max_atr_mult": 2.0,
-
                 # ── Structure / levels / trendlines ──
                 "structure_swing_lookback": 3,
                 "level_cluster_atr_mult": 0.35,
@@ -1351,15 +1389,12 @@ class XauusdSndAdaptiveM1:
                 "level_tol_atr_mult": 0.3,
                 "trendline_tol_atr_mult": 0.35,
                 "trendline_max_pairs": 6,
-
                 # ── SNRC3 / sweep ──
                 "snrc3_max_wait_bars": 12,
                 "sweep_min_pierce_atr_mult": 0.15,
                 "sweep_max_wait_bars": 20,
-
                 # ── HTF confirmation ──
                 "htf_engulf_lookback": 4,
-
                 # ── Regime ──
                 "adx_period": 14,
                 "adx_trend_threshold": 20.0,
@@ -1369,12 +1404,10 @@ class XauusdSndAdaptiveM1:
                 "vol_high_percentile": 0.67,
                 "regime_min_atr_history": 20,
                 "range_lookback_bars": 40,
-
                 # ── Stop loss ──
                 "sl_zone_buffer_atr_mult": 0.15,
                 "sl_zone_buffer_zone_frac": 0.10,
                 "sl_min_atr_mult": 0.5,
-
                 # ── Take profit ladder ──
                 # Targets are *chosen*, not fixed: `_target_grid` maximises
                 # expected R against the measured MFE survival curve for this
@@ -1389,10 +1422,8 @@ class XauusdSndAdaptiveM1:
                 "tp_buffer_points": 20,
                 "tp_buffer_atr_mult": 0.3,
                 "point_value": 0.01,
-
                 # ── Volume ──
                 "volume_lookback_bars": 20,
-
                 # ── Change of character ──
                 # Live evidence: 88.7% of losing trades were in profit first
                 # and gave back 2,579R in aggregate. `engine/` is off-limits
@@ -1402,7 +1433,6 @@ class XauusdSndAdaptiveM1:
                 "choch_exit_enabled": True,
                 "choch_break_atr_mult": 0.1,
                 "choch_sl_atr_mult": 1.0,
-
                 # ── Regime gates (validated out-of-sample) ──
                 # A chronological 70/30 split of 3,105 live trades: these two
                 # gates take out-of-sample PF from 1.02 to ~1.40 while keeping
@@ -1411,7 +1441,6 @@ class XauusdSndAdaptiveM1:
                 "skip_volatility_buckets": (2,),
                 "skip_sessions": ("overlap",),
                 "family_denylist": ("SND_V2",),
-
                 # ── Learner ──
                 "learner_enabled": True,
                 "learner_secure_r": 0.2,
@@ -1502,9 +1531,7 @@ class XauusdSndAdaptiveM1:
         entry_t_ns = pd.DatetimeIndex(df["time"]).as_unit("ns").asi8
         self._check_continuity(int(entry_t_ns[0]), int(entry_t_ns[-1]))
 
-        resampled = _resample(
-            df, int(params["zone_tf_minutes"]), int(params["entry_tf_minutes"])
-        )
+        resampled = _resample(df, int(params["zone_tf_minutes"]), int(params["entry_tf_minutes"]))
         if resampled is None:
             return None
         zone_frame, zone_end_ns = resampled
@@ -1562,9 +1589,7 @@ class XauusdSndAdaptiveM1:
         closes = zone_frame["close"].to_numpy()
         opens = zone_frame["open"].to_numpy()
 
-        swings = _detect_swing_points(
-            highs, lows, int(params["structure_swing_lookback"])
-        )
+        swings = _detect_swing_points(highs, lows, int(params["structure_swing_lookback"]))
         trend_dir, _separation = _trend_direction(closes, params)
         levels = _strong_levels(
             swings,
@@ -1578,9 +1603,7 @@ class XauusdSndAdaptiveM1:
         zones.extend(_detect_zones_v1(zone_frame, atr_series, params))
         zones.extend(_detect_zones_v2(zone_frame, atr_series, params))
         zones.extend(_detect_quasimodo_legacy(zone_frame, atr_series, params))
-        zones.extend(
-            _detect_quasimodo_family(zone_frame, atr_series, params, swings, trend_dir)
-        )
+        zones.extend(_detect_quasimodo_family(zone_frame, atr_series, params, swings, trend_dir))
         zones.extend(
             _detect_snrc3(zone_frame, atr_series, params, levels, bull_engulf, bear_engulf)
         )
@@ -1616,9 +1639,7 @@ class XauusdSndAdaptiveM1:
             "bear": bool(bear[-window:].any()),
         }
 
-    def _select_candidates(
-        self, zones, zone_end_ns, entry_t_ns, highs, lows, closes
-    ):
+    def _select_candidates(self, zones, zone_end_ns, entry_t_ns, highs, lows, closes):
         """Walk every zone forward, keep the ones still alive, flip the ones
         that broke into breakers, and collect those price is touching now."""
         live = []
@@ -1642,9 +1663,7 @@ class XauusdSndAdaptiveM1:
             if zone["source"] == "BREAKER":
                 continue
             flipped = _flip_to_breaker(zone, life["break_ns"])
-            flipped_life = _track_zone(
-                flipped, life["break_ns"], entry_t_ns, highs, lows, closes
-            )
+            flipped_life = _track_zone(flipped, life["break_ns"], entry_t_ns, highs, lows, closes)
             if flipped_life is None or flipped_life["broken"]:
                 continue
             live.append(flipped)
@@ -1655,8 +1674,18 @@ class XauusdSndAdaptiveM1:
     # ── decision ──────────────────────────────────────────────────────
 
     def _decide(
-        self, *, ctx, params, df, zone_frame, atr_series, atr_val,
-        candidates, live_zones, learner, entry_t_ns,
+        self,
+        *,
+        ctx,
+        params,
+        df,
+        zone_frame,
+        atr_series,
+        atr_val,
+        candidates,
+        live_zones,
+        learner,
+        entry_t_ns,
     ):
         last_i = len(df) - 1
         close = float(df["close"].iloc[last_i])
@@ -1704,8 +1733,7 @@ class XauusdSndAdaptiveM1:
         vol_name = ("low", "normal", "high")[vol_bucket]
 
         horizon_ns = (
-            int(params["learner_horizon_bars"]) * int(params["entry_tf_minutes"])
-            * _NS_PER_MINUTE
+            int(params["learner_horizon_bars"]) * int(params["entry_tf_minutes"]) * _NS_PER_MINUTE
         )
         now_ns = int(entry_t_ns[-1])
         threshold = self._gate_threshold(params)
@@ -1715,10 +1743,9 @@ class XauusdSndAdaptiveM1:
         # measured effect is not marginal: high volatility ran PF 0.34 over
         # 508 live trades and the London/NY overlap PF 0.31 over 321. A
         # learner could rediscover both, but only by paying for them again.
-        blocked = (
-            vol_bucket in tuple(params.get("skip_volatility_buckets", ()))
-            or session in tuple(params.get("skip_sessions", ()))
-        )
+        blocked = vol_bucket in tuple(
+            params.get("skip_volatility_buckets", ())
+        ) or session in tuple(params.get("skip_sessions", ()))
 
         scored = []
         for zone, life in candidates:
@@ -1743,9 +1770,17 @@ class XauusdSndAdaptiveM1:
                     continue
 
             plan = self._build_plan(
-                zone=zone, life=life, params=params, close=close, atr_val=atr_val,
-                spread_price=spread_price, live_zones=live_zones, learner=learner,
-                vol_bucket=vol_bucket, adx_value=adx_value, trade_dir=trade_dir,
+                zone=zone,
+                life=life,
+                params=params,
+                close=close,
+                atr_val=atr_val,
+                spread_price=spread_price,
+                live_zones=live_zones,
+                learner=learner,
+                vol_bucket=vol_bucket,
+                adx_value=adx_value,
+                trade_dir=trade_dir,
                 session=session,
             )
             if plan is None:
@@ -1756,15 +1791,27 @@ class XauusdSndAdaptiveM1:
             if trade_dir == -1:
                 range_pos = 1.0 - range_pos
             features = _build_features(
-                zone=zone, life=life, close=close, atr_val=atr_val, atr_slow=atr_slow,
-                adx_value=adx_value, trend_dir=self._trend_dir, htf_dir=self._htf["dir"],
+                zone=zone,
+                life=life,
+                close=close,
+                atr_val=atr_val,
+                atr_slow=atr_slow,
+                adx_value=adx_value,
+                trend_dir=self._trend_dir,
+                htf_dir=self._htf["dir"],
                 htf_engulf=1.0 if (self._htf["bull"] if demand else self._htf["bear"]) else 0.0,
-                structure_bias=structure_bias, trade_dir=trade_dir,
-                rr_room=plan["rr_room"], spread_price=spread_price,
+                structure_bias=structure_bias,
+                trade_dir=trade_dir,
+                rr_room=plan["rr_room"],
+                spread_price=spread_price,
                 sl_points=plan["sl_points"],
-                hour=float(hour) + float(now.minute) / 60.0, session=session,
-                last_bar=last_bar, range_pos=range_pos, extension_atr=extension_atr,
-                volume=volume, choch=choch,
+                hour=float(hour) + float(now.minute) / 60.0,
+                session=session,
+                last_bar=last_bar,
+                range_pos=range_pos,
+                extension_atr=extension_atr,
+                volume=volume,
+                choch=choch,
             )
 
             verdict = None
@@ -1774,10 +1821,18 @@ class XauusdSndAdaptiveM1:
                 )
                 verdict = learner.score(features, plan["bucket"], prior)
                 self._record_candidate(
-                    learner=learner, zone=zone, life=life, features=features,
-                    bucket=plan["bucket"], now_ns=now_ns, close=close,
-                    trade_dir=trade_dir, sl_points=plan["sl_points"], atr_val=atr_val,
-                    horizon_ns=horizon_ns, params=params,
+                    learner=learner,
+                    zone=zone,
+                    life=life,
+                    features=features,
+                    bucket=plan["bucket"],
+                    now_ns=now_ns,
+                    close=close,
+                    trade_dir=trade_dir,
+                    sl_points=plan["sl_points"],
+                    atr_val=atr_val,
+                    horizon_ns=horizon_ns,
+                    params=params,
                 )
                 # Gated from the first bar, not only once the bucket is
                 # `ready`: with historical priors seeded, a cold estimate is
@@ -1801,14 +1856,26 @@ class XauusdSndAdaptiveM1:
             zone, life, plan, verdict, _features = scored[0]
             self._last_choch = choch
             return self._build_signals(
-                zone=zone, life=life, plan=plan, verdict=verdict, params=params,
-                zone_frame=zone_frame, structure=structure, now=now, threshold=threshold,
+                zone=zone,
+                life=life,
+                plan=plan,
+                verdict=verdict,
+                params=params,
+                zone_frame=zone_frame,
+                structure=structure,
+                now=now,
+                threshold=threshold,
                 atr_val=atr_val,
             )
 
         exit_signal = self._choch_exit_signal(
-            choch=choch, params=params, atr_val=atr_val, spread_price=spread_price,
-            structure=structure, zone_frame=zone_frame, now=now,
+            choch=choch,
+            params=params,
+            atr_val=atr_val,
+            spread_price=spread_price,
+            structure=structure,
+            zone_frame=zone_frame,
+            now=now,
         )
         self._last_choch = choch
         return exit_signal
@@ -1845,9 +1912,7 @@ class XauusdSndAdaptiveM1:
 
         structure_points = tuple(
             StructurePoint(
-                time=zone_frame["time"].iloc[
-                    min(max(int(s["index"]), 0), len(zone_frame) - 1)
-                ],
+                time=zone_frame["time"].iloc[min(max(int(s["index"]), 0), len(zone_frame) - 1)],
                 price=s["price"],
                 label=s["label"],
             )
@@ -1868,8 +1933,11 @@ class XauusdSndAdaptiveM1:
                 structure=structure_points,
                 indicators=(
                     IndicatorReading(
-                        name="choch_direction", value=float(choch), threshold=0.0,
-                        comparison=">", passed=True,
+                        name="choch_direction",
+                        value=float(choch),
+                        threshold=0.0,
+                        comparison=">",
+                        passed=True,
                     ),
                 ),
             ),
@@ -1893,8 +1961,20 @@ class XauusdSndAdaptiveM1:
         return float(np.clip(params.get("learner_gate_p", 0.65), 0.05, 0.99))
 
     def _build_plan(
-        self, *, zone, life, params, close, atr_val, spread_price, live_zones,
-        learner, vol_bucket, adx_value, trade_dir, session,
+        self,
+        *,
+        zone,
+        life,
+        params,
+        close,
+        atr_val,
+        spread_price,
+        live_zones,
+        learner,
+        vol_bucket,
+        adx_value,
+        trade_dir,
+        session,
     ):
         """Stop, take-profit ladder and learner bucket for one candidate."""
         demand = zone["kind"] == ZoneKind.DEMAND
@@ -1922,7 +2002,8 @@ class XauusdSndAdaptiveM1:
                 # zone's own height is netted off before clamping.
                 beyond = max(learned - zone_height / atr_val, 0.0)
                 buffer_mult = AdaptiveLearner.blend(
-                    base_buffer_mult, beyond,
+                    base_buffer_mult,
+                    beyond,
                     lo_frac=float(params.get("sl_buffer_band_lo", 0.6)),
                     hi_frac=float(params.get("sl_buffer_band_hi", 2.2)),
                 )
@@ -1959,7 +2040,8 @@ class XauusdSndAdaptiveM1:
         else:
             below = sorted(
                 [z for z in opposite if z["price_high"] < close],
-                key=lambda z: z["price_high"], reverse=True,
+                key=lambda z: z["price_high"],
+                reverse=True,
             )
             if len(below) >= 1:
                 zone_target_1 = close - below[0]["price_high"] - tp_buffer
@@ -1974,7 +2056,8 @@ class XauusdSndAdaptiveM1:
         # SpreadGate silently rejects anything below it.
         floor_rr = float(params.get("tp_min_rr_floor", 1.75))
         grid = tuple(
-            float(g) for g in params.get("tp_target_grid", (1.75, 2.0, 2.5, 3.0))
+            float(g)
+            for g in params.get("tp_target_grid", (1.75, 2.0, 2.5, 3.0))
             if float(g) >= floor_rr
         ) or (floor_rr,)
 
@@ -2016,14 +2099,24 @@ class XauusdSndAdaptiveM1:
             "r_target": float(r_target),
             "p_hit": float(p_hit),
             "expected_r": float(expected_r),
-            "rr_room": float(
-                zone_target_1 / risk_price if zone_target_1 is not None else 0.0
-            ),
+            "rr_room": float(zone_target_1 / risk_price if zone_target_1 is not None else 0.0),
         }
 
     def _record_candidate(
-        self, *, learner, zone, life, features, bucket, now_ns, close, trade_dir,
-        sl_points, atr_val, horizon_ns, params,
+        self,
+        *,
+        learner,
+        zone,
+        life,
+        features,
+        bucket,
+        now_ns,
+        close,
+        trade_dir,
+        sl_points,
+        atr_val,
+        horizon_ns,
+        params,
     ):
         """Record this touch for grading — once per touch episode, whether or
         not it is traded.
@@ -2032,10 +2125,7 @@ class XauusdSndAdaptiveM1:
         self-fulfilling filter: labels come from price, so a family the gate
         has stopped trading keeps accumulating honest evidence and can be
         readmitted when it starts working again."""
-        key = (
-            f"{zone['family']}|{zone['price_low']:.2f}"
-            f"|{zone['price_high']:.2f}|{life['touches']}"
-        )
+        key = f"{zone['family']}|{zone['price_low']:.2f}|{zone['price_high']:.2f}|{life['touches']}"
         if key in self._observed:
             return
         self._observed[key] = now_ns
@@ -2055,8 +2145,18 @@ class XauusdSndAdaptiveM1:
         )
 
     def _build_signals(
-        self, *, zone, life, plan, verdict, params, zone_frame, structure, now,
-        threshold, atr_val,
+        self,
+        *,
+        zone,
+        life,
+        plan,
+        verdict,
+        params,
+        zone_frame,
+        structure,
+        now,
+        threshold,
+        atr_val,
     ):
         demand = zone["kind"] == ZoneKind.DEMAND
         direction = Direction.BUY if demand else Direction.SELL
@@ -2072,9 +2172,7 @@ class XauusdSndAdaptiveM1:
         )
         structure_points = tuple(
             StructurePoint(
-                time=zone_frame["time"].iloc[
-                    min(max(int(s["index"]), 0), len(zone_frame) - 1)
-                ],
+                time=zone_frame["time"].iloc[min(max(int(s["index"]), 0), len(zone_frame) - 1)],
                 price=s["price"],
                 label=s["label"],
             )
@@ -2083,39 +2181,53 @@ class XauusdSndAdaptiveM1:
 
         readings = [
             IndicatorReading(
-                name="target_expected_r", value=round(plan["expected_r"], 4),
-                threshold=0.0, comparison=">", passed=plan["expected_r"] > 0.0,
+                name="target_expected_r",
+                value=round(plan["expected_r"], 4),
+                threshold=0.0,
+                comparison=">",
+                passed=plan["expected_r"] > 0.0,
             ),
             IndicatorReading(
-                name="target_p_hit", value=round(plan["p_hit"], 4),
+                name="target_p_hit",
+                value=round(plan["p_hit"], 4),
                 threshold=round(1.0 / (1.0 + plan["r_target"]), 4),
-                comparison=">", passed=plan["p_hit"] > 1.0 / (1.0 + plan["r_target"]),
+                comparison=">",
+                passed=plan["p_hit"] > 1.0 / (1.0 + plan["r_target"]),
             ),
             IndicatorReading(
-                name="sl_buffer_atr_mult", value=plan["buffer_mult"],
+                name="sl_buffer_atr_mult",
+                value=plan["buffer_mult"],
                 threshold=float(params["sl_zone_buffer_atr_mult"]),
-                comparison=">", passed=True,
+                comparison=">",
+                passed=True,
             ),
             IndicatorReading(
-                name="zone_touches", value=float(life["touches"]),
-                threshold=1.0, comparison="<", passed=life["touches"] <= 1,
+                name="zone_touches",
+                value=float(life["touches"]),
+                threshold=1.0,
+                comparison="<",
+                passed=life["touches"] <= 1,
             ),
         ]
         if verdict is not None:
             readings.insert(
                 0,
                 IndicatorReading(
-                    name="learner_p_secure", value=round(verdict.p_secure, 4),
-                    threshold=round(threshold, 4), comparison=">",
+                    name="learner_p_secure",
+                    value=round(verdict.p_secure, 4),
+                    threshold=round(threshold, 4),
+                    comparison=">",
                     passed=verdict.p_secure >= threshold,
                 ),
             )
             readings.insert(
                 1,
                 IndicatorReading(
-                    name="learner_bucket_samples", value=round(verdict.bucket_samples, 1),
+                    name="learner_bucket_samples",
+                    value=round(verdict.bucket_samples, 1),
                     threshold=float(params["learner_min_bucket_samples"]),
-                    comparison=">", passed=verdict.ready,
+                    comparison=">",
+                    passed=verdict.ready,
                 ),
             )
             learn_note = (
@@ -2137,18 +2249,26 @@ class XauusdSndAdaptiveM1:
         # live transaction cost already runs at 116% of gross profit.
         return (
             Signal(
-                direction=direction, sl_points=plan["sl_points"], tp_points=plan["tp1"],
+                direction=direction,
+                sl_points=plan["sl_points"],
+                tp_points=plan["tp1"],
                 confidence=_confidence(verdict, 0.75),
                 reason=f"{base_reason} tp={plan['tp1']:.2f} (Target)",
-                zone=annotation, pattern=zone.get("pattern"),
-                structure=structure_points, indicators=readings_tuple,
+                zone=annotation,
+                pattern=zone.get("pattern"),
+                structure=structure_points,
+                indicators=readings_tuple,
             ),
             Signal(
-                direction=direction, sl_points=plan["sl_points"], tp_points=plan["tp2"],
+                direction=direction,
+                sl_points=plan["sl_points"],
+                tp_points=plan["tp2"],
                 confidence=_confidence(verdict, 0.65),
                 reason=f"{base_reason} tp={plan['tp2']:.2f} (Runner)",
-                zone=annotation, pattern=zone.get("pattern"),
-                structure=structure_points, indicators=readings_tuple,
+                zone=annotation,
+                pattern=zone.get("pattern"),
+                structure=structure_points,
+                indicators=readings_tuple,
             ),
         )
 

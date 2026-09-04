@@ -27,6 +27,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { useActiveAccount } from "@/shared/api/account-context";
 import { getTradeDecisionContext, type DecisionContext } from "@/shared/api/client";
+import { getLocalTimeZoneOptions } from "@/features/chart/chartFormat";
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -64,10 +65,12 @@ export function DecisionChartSnippet({ tradeId }: { tradeId: string }) {
     const ok = cssVar("--color-ok");
     const err = cssVar("--color-err");
     const line = cssVar("--color-line");
+    const timeZoneOpts = getLocalTimeZoneOptions();
     const chart = createChart(container, {
       layout: { background: { color: cssVar("--color-panel") }, textColor: cssVar("--color-ink") },
       grid: { vertLines: { color: line }, horzLines: { color: line } },
-      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line , tickMarkFormatter: timeZoneOpts.timeScale.tickMarkFormatter },
+      localization: timeZoneOpts.localization,
       rightPriceScale: { borderColor: line },
     });
 

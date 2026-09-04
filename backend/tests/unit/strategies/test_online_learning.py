@@ -58,9 +58,7 @@ def test_entry_bar_cannot_grade_its_own_sample():
     _observe(learner, entry_ns=10 * NS)
     # A bar at exactly the entry timestamp that would blow through both
     # barriers must resolve nothing: the fill happened on that bar.
-    resolved = learner.advance(
-        np.array([10 * NS]), np.array([200.0]), np.array([0.0])
-    )
+    resolved = learner.advance(np.array([10 * NS]), np.array([200.0]), np.array([0.0]))
     assert resolved == []
     assert learner.pending_count == 1
 
@@ -93,9 +91,7 @@ def test_same_bar_tie_resolves_pessimistically_as_a_stop():
     learner = _learner()
     _observe(learner, entry_ns=0, price=100.0, sl=1.0)
     # One bar that touches both +0.2 and -1.0; the intrabar path is unknown.
-    resolved = learner.advance(
-        np.array([0, NS]), np.array([100.0, 101.0]), np.array([100.0, 98.0])
-    )
+    resolved = learner.advance(np.array([0, NS]), np.array([100.0, 101.0]), np.array([100.0, 98.0]))
     assert len(resolved) == 1
     assert resolved[0].label == 0
 
@@ -157,14 +153,32 @@ def test_short_side_barriers_are_mirrored():
 def test_observe_rejects_ungradeable_inputs():
     learner = _learner()
     assert _observe(learner, sl=0.0) is False
-    assert learner.observe(
-        features=_features(), bucket="B", entry_ns=0, entry_price=100.0,
-        direction=1, sl_dist=1.0, atr=0.0, deadline_ns=NS,
-    ) is False
-    assert learner.observe(
-        features=np.array([np.nan, 0.0, 0.0, 0.0]), bucket="B", entry_ns=0,
-        entry_price=100.0, direction=1, sl_dist=1.0, atr=1.0, deadline_ns=NS,
-    ) is False
+    assert (
+        learner.observe(
+            features=_features(),
+            bucket="B",
+            entry_ns=0,
+            entry_price=100.0,
+            direction=1,
+            sl_dist=1.0,
+            atr=0.0,
+            deadline_ns=NS,
+        )
+        is False
+    )
+    assert (
+        learner.observe(
+            features=np.array([np.nan, 0.0, 0.0, 0.0]),
+            bucket="B",
+            entry_ns=0,
+            entry_price=100.0,
+            direction=1,
+            sl_dist=1.0,
+            atr=1.0,
+            deadline_ns=NS,
+        )
+        is False
+    )
     assert learner.pending_count == 0
 
 
@@ -189,13 +203,12 @@ def test_prior_logit_shifts_a_cold_estimate_and_evidence_overrides_it():
 
 def test_p_reach_and_best_target_use_the_measured_curve():
     learner = _learner()
+
     # A curve where 1.5R is reached often and 3.0R never.
     def curve(r):
         return {1.5: 0.6, 3.0: 0.05}[r]
 
-    r_target, expected, p_hit = learner.best_target(
-        "empty", grid=(1.5, 3.0), prior_curve=curve
-    )
+    r_target, expected, p_hit = learner.best_target("empty", grid=(1.5, 3.0), prior_curve=curve)
     assert r_target == 1.5
     assert p_hit == pytest.approx(0.6)
     assert expected == pytest.approx(0.6 * 1.5 - 0.4)
@@ -236,7 +249,8 @@ def test_reset_clears_every_learned_thing():
         _observe(learner, entry_ns=i * 10 * NS, price=100.0, sl=1.0)
         learner.advance(
             np.array([i * 10 * NS, (i * 10 + 1) * NS]),
-            np.array([100.0, 100.5]), np.array([100.0, 99.95]),
+            np.array([100.0, 100.5]),
+            np.array([100.0, 99.95]),
         )
     assert learner.resolved_count > 0
     learner.reset()

@@ -103,9 +103,7 @@ class ScalpBollingerReversionV2:
         if not np.isfinite(prev_upper) or not np.isfinite(prev_lower) or not np.isfinite(last_sma):
             return None
 
-        atr = _atr(
-            m5["high"].to_numpy(), m5["low"].to_numpy(), m5["close"].to_numpy(), atr_period
-        )
+        atr = _atr(m5["high"].to_numpy(), m5["low"].to_numpy(), m5["close"].to_numpy(), atr_period)
         if atr is None or atr <= 0:
             return None
 

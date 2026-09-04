@@ -21,6 +21,7 @@ import { Newspaper } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { money, pct, plTone, profitFactor } from "./format";
 import type { DailyPnlRow } from "./useDailyPnl";
+import { getLocalTimeZoneOptions } from "../chart/chartFormat";
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -56,10 +57,12 @@ export function DailyPnlPanel({ rows, loading, error }: DailyPnlPanelProps) {
     const line = cssVar("--color-line");
     const ok = cssVar("--color-ok");
     const err = cssVar("--color-err");
+    const timeZoneOpts = getLocalTimeZoneOptions();
     const chart = createChart(container, {
       layout: { background: { color: cssVar("--color-panel") }, textColor: cssVar("--color-ink") },
       grid: { vertLines: { color: line }, horzLines: { color: line } },
-      timeScale: { borderColor: line },
+      timeScale: { borderColor: line , tickMarkFormatter: timeZoneOpts.timeScale.tickMarkFormatter },
+      localization: timeZoneOpts.localization,
       rightPriceScale: { borderColor: line },
     });
 

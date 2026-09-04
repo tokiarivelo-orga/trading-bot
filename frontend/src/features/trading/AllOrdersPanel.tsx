@@ -112,7 +112,7 @@ type PositionSortKey =
 type PendingSortKey = "symbol" | "side" | "order_type" | "volume" | "price" | "sl" | "tp";
 
 function formatIsoTime(iso: string): string {
-  return new Date(iso).toISOString().replace("T", " ").slice(0, 16);
+  return new Date(iso).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function ActiveOrdersTables({

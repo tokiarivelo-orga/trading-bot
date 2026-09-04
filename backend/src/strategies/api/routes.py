@@ -262,9 +262,7 @@ async def update_version_spec(
 ) -> StrategyVersionOut:
     service = _service(account)
     try:
-        updated = await asyncio.to_thread(
-            service.update_spec, version_id, body.model_dump()
-        )
+        updated = await asyncio.to_thread(service.update_spec, version_id, body.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return StrategyVersionOut.from_domain(updated)

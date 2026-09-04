@@ -522,9 +522,7 @@ class AdaptiveLearner:
         numerator = cfg.global_prior_strength * cfg.global_prior_rate + self._global_wins
         return float(numerator / (cfg.global_prior_strength + self._global_count))
 
-    def score(
-        self, features: np.ndarray, bucket: str, prior_logit: float = 0.0
-    ) -> LearnerVerdict:
+    def score(self, features: np.ndarray, bucket: str, prior_logit: float = 0.0) -> LearnerVerdict:
         """Blend three sources of belief about one setup, in log-odds.
 
             logit(p) = logit(p_bucket | prior)          empirical, this bucket

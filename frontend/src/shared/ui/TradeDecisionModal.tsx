@@ -17,7 +17,7 @@ import { getStrategyVersions, type TradeHistoryItem } from "@/shared/api/client"
 import { DecisionChartSnippet } from "@/shared/ui/DecisionChartSnippet";
 
 function formatFullTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + " UTC";
 }
 
 // `strategy_version` is always written as `"{name}:v{version}"` (see

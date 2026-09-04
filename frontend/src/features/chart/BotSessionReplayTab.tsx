@@ -50,9 +50,7 @@ function parseDateTimeLocal(value: string): number | null {
 
 function formatCursor(epochSeconds: number): string {
   return new Date(epochSeconds * 1000)
-    .toISOString()
-    .replace('T', ' ')
-    .slice(0, 19);
+    .toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 export interface BotSessionReplayTabProps {

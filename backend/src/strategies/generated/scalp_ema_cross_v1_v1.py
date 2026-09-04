@@ -77,9 +77,7 @@ class ScalpEmaCrossV1:
         if not crossed_up and not crossed_down:
             return None
 
-        atr = _atr(
-            m5["high"].to_numpy(), m5["low"].to_numpy(), m5["close"].to_numpy(), atr_period
-        )
+        atr = _atr(m5["high"].to_numpy(), m5["low"].to_numpy(), m5["close"].to_numpy(), atr_period)
         if atr is None or atr <= 0:
             return None
         sl_distance = atr * atr_mult

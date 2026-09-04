@@ -266,6 +266,7 @@ class FatigueReading:
 # Small numeric helpers
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _ramp(value: float, onset: float, full: float) -> float:
     """Linear 0→1 ramp: 0 at or below `onset`, 1 at or above `full`.
 
@@ -383,6 +384,7 @@ def _pivots(highs: np.ndarray, lows: np.ndarray, wing: int) -> list[tuple[int, f
 # Sub-measure 1 — momentum divergence
 # ─────────────────────────────────────────────────────────────────────
 
+
 def momentum_divergence_score(
     highs, lows, closes, direction: int, params: dict | None = None
 ) -> float:
@@ -450,6 +452,7 @@ def momentum_divergence_score(
 # Sub-measure 2 — impulse / leg decay
 # ─────────────────────────────────────────────────────────────────────
 
+
 def impulse_decay_score(
     highs, lows, direction: int, atr: float, params: dict | None = None
 ) -> float:
@@ -512,9 +515,7 @@ def impulse_decay_score(
     shrink_score = _ramp(shrink, 0.0, full_shrink)
 
     clean = [depth for depth in pullbacks if math.isfinite(depth)]
-    deepening_score = (
-        _ramp(clean[-1] - clean[0], 0.0, full_deepening) if len(clean) >= 2 else NAN
-    )
+    deepening_score = _ramp(clean[-1] - clean[0], 0.0, full_deepening) if len(clean) >= 2 else NAN
 
     scores = [s for s in (shrink_score, deepening_score) if math.isfinite(s)]
     if not scores:
@@ -525,6 +526,7 @@ def impulse_decay_score(
 # ─────────────────────────────────────────────────────────────────────
 # Sub-measure 3 — range / body decay
 # ─────────────────────────────────────────────────────────────────────
+
 
 def range_decay_score(opens, highs, lows, closes, params: dict | None = None) -> float:
     """Volatility drying up underneath a trend that is still going.
@@ -577,6 +579,7 @@ def range_decay_score(opens, highs, lows, closes, params: dict | None = None) ->
 # Sub-measure 4 — volume decay
 # ─────────────────────────────────────────────────────────────────────
 
+
 def volume_decay_score(volumes, closes, direction: int, params: dict | None = None) -> float:
     """Participation falling away while price keeps extending.
 
@@ -619,6 +622,7 @@ def volume_decay_score(volumes, closes, direction: int, params: dict | None = No
 # ─────────────────────────────────────────────────────────────────────
 # Sub-measure 5 — wick / rejection asymmetry
 # ─────────────────────────────────────────────────────────────────────
+
 
 def wick_rejection_score(
     opens, highs, lows, closes, direction: int, params: dict | None = None
@@ -672,9 +676,8 @@ def wick_rejection_score(
 # Sub-measure 6 — overextension
 # ─────────────────────────────────────────────────────────────────────
 
-def overextension_score(
-    closes, direction: int, atr: float, params: dict | None = None
-) -> float:
+
+def overextension_score(closes, direction: int, atr: float, params: dict | None = None) -> float:
     """How stretched the move is, from three angles.
 
       * extension — signed distance from an EMA anchor in ATR units. The
@@ -710,7 +713,7 @@ def overextension_score(
         _param(params, "extension_full_atr"),
     )
 
-    steps = np.diff(closes[-(streak_full + 1):]) * direction
+    steps = np.diff(closes[-(streak_full + 1) :]) * direction
     # Length of the trailing run of strictly favourable closes.
     against = np.flatnonzero(steps <= 0.0)
     streak = steps.size if against.size == 0 else steps.size - 1 - int(against[-1])
@@ -722,8 +725,8 @@ def overextension_score(
 
     recent_slope = (closes[-1] - closes[-1 - accel_window]) * direction / accel_window
     prior_slope = (
-        closes[-1 - accel_window] - closes[-1 - 2 * accel_window]
-    ) * direction / accel_window
+        (closes[-1 - accel_window] - closes[-1 - 2 * accel_window]) * direction / accel_window
+    )
     if prior_slope > 0.0:
         accel_part = _ramp(
             float(recent_slope / prior_slope - 1.0),
@@ -754,6 +757,7 @@ def overextension_score(
 # Sub-measure 7 — persistence decay (variance ratio)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def persistence_decay_score(closes, params: dict | None = None) -> float:
     """Variance ratio: has the walk stopped being persistent?
 
@@ -773,7 +777,7 @@ def persistence_decay_score(closes, params: dict | None = None) -> float:
     q = int(_param(params, "persistence_q"))
     if q < 2 or window < q * 4 or closes.size < window + 1:
         return NAN
-    segment = closes[-(window + 1):]
+    segment = closes[-(window + 1) :]
     if not _finite(segment) or float(np.min(segment)) <= 0.0:
         return NAN
 
@@ -798,6 +802,7 @@ def persistence_decay_score(closes, params: dict | None = None) -> float:
 # Sub-measure 8 — trend age
 # ─────────────────────────────────────────────────────────────────────
 
+
 def trend_age_score(closes, direction: int, params: dict | None = None) -> float:
     """Bars since the EMA regime last agreed with `direction`.
 
@@ -819,8 +824,7 @@ def trend_age_score(closes, direction: int, params: dict | None = None) -> float
         return NAN
     series = pd.Series(closes)
     spread = (
-        series.ewm(span=fast, adjust=False).mean()
-        - series.ewm(span=slow, adjust=False).mean()
+        series.ewm(span=fast, adjust=False).mean() - series.ewm(span=slow, adjust=False).mean()
     ).to_numpy()
     agreeing = (spread * direction) > 0.0
     if not bool(agreeing[-1]):
@@ -838,6 +842,7 @@ def trend_age_score(closes, direction: int, params: dict | None = None) -> float
 # Composite
 # ─────────────────────────────────────────────────────────────────────
 
+
 def required_bars(params: dict | None = None, weights: dict | None = None) -> int:
     """Bars needed for every enabled component to be able to vote.
 
@@ -854,7 +859,8 @@ def required_bars(params: dict | None = None, weights: dict | None = None) -> in
         # A leg needs a confirmed pivot at each end, and pivots are
         # confirmed `wing` bars late; 2 legs + their pullbacks is ~8
         # alternating pivots, which on a normal series is this many bars.
-        "impulse_decay": int(_param(params, "impulse_pivot_wing")) * 2
+        "impulse_decay": int(_param(params, "impulse_pivot_wing"))
+        * 2
         * (2 * int(_param(params, "impulse_legs")) + 2)
         + 20,
         "range_decay": int(_param(params, "range_slow")),

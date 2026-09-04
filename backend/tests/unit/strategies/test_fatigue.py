@@ -251,9 +251,7 @@ def test_range_decay_is_direction_free() -> None:
     therefore give the identical number."""
     bars = _exhausted_uptrend()
     up = range_decay_score(bars["opens"], bars["highs"], bars["lows"], bars["closes"])
-    down = range_decay_score(
-        -bars["opens"], -bars["lows"], -bars["highs"], -bars["closes"]
-    )
+    down = range_decay_score(-bars["opens"], -bars["lows"], -bars["highs"], -bars["closes"])
     assert up == pytest.approx(down)
 
 
@@ -296,18 +294,14 @@ def test_volume_decay_abstains_without_a_volume_series() -> None:
 def test_wick_rejection_high_when_upper_wicks_dominate_an_advance() -> None:
     closes = 2000.0 + np.cumsum(np.full(40, 0.4))
     bars = _bars(closes, span=2.0, upper_bias=0.45)
-    score = wick_rejection_score(
-        bars["opens"], bars["highs"], bars["lows"], bars["closes"], 1
-    )
+    score = wick_rejection_score(bars["opens"], bars["highs"], bars["lows"], bars["closes"], 1)
     assert score > 0.5
 
 
 def test_wick_rejection_low_on_symmetric_wicks() -> None:
     closes = 2000.0 + np.cumsum(np.full(40, 0.4))
     bars = _bars(closes, span=2.0, upper_bias=0.0)
-    score = wick_rejection_score(
-        bars["opens"], bars["highs"], bars["lows"], bars["closes"], 1
-    )
+    score = wick_rejection_score(bars["opens"], bars["highs"], bars["lows"], bars["closes"], 1)
     assert score == 0.0
 
 

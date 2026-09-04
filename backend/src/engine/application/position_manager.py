@@ -14,17 +14,24 @@ which strategy opened it (bot-agnostic, applies even to manually-opened
 positions):
 
   - Breakeven at +1R: once unrealized progress reaches the initial risk
-    distance, SL moves to the exact entry price.
+    distance, SL moves to entry price plus a protective buffer that clears
+    both the current spread and the symbol's `stops_level` (see
+    `_spread_clearing_buffer`) — never to the bare entry price, which would
+    still realize a small loss equal to the spread once filled on the
+    opposite side of the book from the entry.
   - Secure-on-base-clear & Structural Continuation Trailing: once a fresh
     RBR/DBD/RBD/DBR continuation base has formed on `secure_timeframe` and
     price has since closed clear of it in the trade's favor, SL moves to
-    entry + a small real profit buffer (`secure_buffer_r_mult` x R). Furthermore,
-    if the cleared zone sits further along in profit, SL is ratcheted directly
-    underneath (for buys) or above (for sells) the zone boundary.
+    entry + a small real profit buffer (`secure_buffer_r_mult` x R, floored
+    at `_spread_clearing_buffer` so a tight-SL scalp's R-buffer can never be
+    smaller than the spread it must clear). Furthermore, if the cleared zone
+    sits further along in profit, SL is ratcheted directly underneath (for
+    buys) or above (for sells) the zone boundary.
   - "Zone Contraire" Defensive Breakeven: upon approaching or interacting with
     an unbroken opposing base (Supply for buy, Demand for sell) within 0.5R,
-    instantly triggers a defensive breakeven lock-in (+ profit buffer) so an
-    upcoming liquidity rejection does not turn a running trade into a loss.
+    instantly triggers a defensive breakeven lock-in (+ the same floored
+    profit buffer) so an upcoming liquidity rejection does not turn a
+    running trade into a loss.
 
 All rules only ever tighten SL (never loosen it) — see `_improves` — so
 whichever rule's candidate is currently more protective wins, and no
@@ -51,6 +58,21 @@ regime while winning locks in a fraction of unrealized profit; a HIGH regime
 with enough running profit trails SL behind the best price reached so far by
 a multiple of ATR ("chandelier" exit). `volatility_config=None` disables all
 of this and reproduces pre-Phase-B behavior exactly.
+
+A fifth rule (`structure_pivot_config`) is a progressive, price-action-based
+profit lock distinct from the fixed +1R breakeven and the zone-based
+trailing above:
+
+  - Structure-pivot profit lock: once a position's peak unrealized profit
+    proxies "a TP1 (or TP2) leg would have triggered by now" (`arm_r`), SL
+    ratchets to just beyond the most recent fresh swing-structure pivot in
+    the trade's favor (below a Higher-Low for a buy, above a Lower-High for
+    a sell) — see `engine/domain/structure_pivot.py` for the fractal-pivot
+    detector, the arming proxy, and why a real TP1/TP2-sibling-closed
+    signal is not reliably available from live broker position data.
+
+`structure_pivot_config=None` disables it and reproduces pre-existing
+behavior exactly.
 """
 
 from __future__ import annotations
@@ -64,6 +86,7 @@ import numpy as np
 
 from src.broker.application.order_service import OrderService
 from src.broker.application.reconciliation import ReconciliationService
+from src.broker.domain.broker_constraints import min_stop_distance
 from src.broker.domain.trading import (
     OrderRejected,
     PendingOrder,
@@ -77,6 +100,13 @@ from src.engine.domain.exit_policy import (
     ExitPolicyConfig,
     ExitPolicySettings,
     decide_exit,
+    peak_r,
+)
+from src.engine.domain.structure_pivot import (
+    StructurePivotConfig,
+    SwingPivot,
+    decide_structure_pivot_exit,
+    detect_swing_pivots,
 )
 from src.engine.domain.volatility import (
     VolatilityConfig,
@@ -110,6 +140,7 @@ class PositionManager:
         volatility_config: VolatilityConfig | None = None,
         exit_policy_config: ExitPolicyConfig | None = None,
         exit_policy_settings: ExitPolicySettings | None = None,
+        structure_pivot_config: StructurePivotConfig | None = None,
         magic_to_strategy: Mapping[int, str] | None = None,
     ) -> None:
         self._order_service = order_service
@@ -122,6 +153,7 @@ class PositionManager:
         self._secure_buffer_r_mult = secure_buffer_r_mult
         self._volatility_config = volatility_config
         self._exit_policy_config = exit_policy_config
+        self._structure_pivot_config = structure_pivot_config
         # Per-bot resolution. `magic` is the only bot identity an open
         # position carries (`magic_number(symbol, skill_name)`), so the
         # container hands over the reverse map it can build from the loaded
@@ -167,11 +199,15 @@ class PositionManager:
         opened it — those still apply on top of whatever this leaves
         behind.
 
-        `CLOSE` always executes. `BREAKEVEN` is still gated through
-        `_improves` so a strategy can never *loosen* a stop `_manage` (or an
-        earlier strategy action) already tightened past entry price — the
-        same never-loosen invariant every other SL-tightening rule in this
-        class obeys."""
+        `CLOSE` always executes. `BREAKEVEN` and `SET_SL` are both gated
+        through `_improves` so a strategy can never *loosen* a stop
+        `_manage` (or an earlier strategy action) already tightened past
+        entry price — the same never-loosen invariant every other
+        SL-tightening rule in this class obeys. `SET_SL` differs from
+        `BREAKEVEN` only in its candidate price: `action.target_price`
+        instead of `position.open_price`, for setups that want to lock in
+        more than breakeven (e.g. "just past a sibling leg's TP") without a
+        new class of rule."""
         direction = 1 if position.side is Side.BUY else -1
         if action.action is ExitActionKind.CLOSE:
             await self._order_service.close_position(
@@ -202,6 +238,25 @@ class PositionManager:
                     candidate,
                     action.reason or "strategy breakeven",
                 )
+            return
+        if action.action is ExitActionKind.SET_SL:
+            candidate = action.target_price
+            if candidate is None:
+                return
+            if position.sl is None or self._improves(candidate, position.sl, direction):
+                await self._order_service.modify_position(
+                    position.ticket,
+                    sl=candidate,
+                    tp=position.tp,
+                    reason=action.reason or "strategy sl update",
+                )
+                logger.info(
+                    "strategy sl update: ticket=%d %s sl moved to %.5f — %s",
+                    position.ticket,
+                    position.symbol,
+                    candidate,
+                    action.reason or "strategy sl update",
+                )
 
     async def on_candle_closed(self, symbol: str) -> None:
         positions = await self._order_service.get_positions(symbol)
@@ -217,7 +272,7 @@ class PositionManager:
             await self._reconciliation.reconcile_vanished(symbol, set(vanished))
 
         if positions:
-            bases, regime, atr_value = await self._detect_bases(symbol)
+            bases, regime, atr_value, pivots = await self._detect_bases(symbol)
             # One symbol-info fetch per symbol per candle close, shared by every
             # open position on that symbol — same cost concern/pattern as the
             # `_detect_bases` hoist above: two+ positions on the same symbol
@@ -227,30 +282,59 @@ class PositionManager:
                 self._candles_since_open[position.ticket] = (
                     self._candles_since_open.get(position.ticket, 0) + 1
                 )
-                await self._manage(position, bases, info, regime, atr_value)
+                try:
+                    await self._manage(position, bases, info, regime, atr_value, pivots)
+                except OrderRejected as exc:
+                    # A broker-side reject from any SL/TP modify or close
+                    # `_manage` attempts (most commonly retcode=10016 "invalid
+                    # stops" — the proposed SL is inside the symbol's
+                    # stops_level distance from price) must never propagate:
+                    # uncaught, it climbs out of `on_candle_closed` through
+                    # `TradeEngine.on_candle_closed`, where the event bus's
+                    # `gather(return_exceptions=True)` is the only thing that
+                    # stops it from killing the process — and by then it has
+                    # already skipped every other open position on this
+                    # symbol *and* this candle's entire entry evaluation
+                    # (`_try_enter` runs after position management in
+                    # `TradeEngine.on_candle_closed`). Logged and skipped here
+                    # instead: this one position's management sits out this
+                    # candle, every other position and the entry pass still
+                    # run normally.
+                    logger.warning(
+                        "position management skipped: ticket=%d %s — broker rejected an "
+                        "order, will retry next candle: %s",
+                        position.ticket,
+                        position.symbol,
+                        exc,
+                    )
 
         if self._risk_manager is not None:
             await self._manage_pending_orders(symbol)
 
     async def _detect_bases(
         self, symbol: str
-    ) -> tuple[list[Base], VolatilityRegime | None, float | None]:
+    ) -> tuple[list[Base], VolatilityRegime | None, float | None, list[SwingPivot]]:
         """One zone scan per symbol per candle close, shared by every open
         position on that symbol — cheaper than re-fetching/re-detecting per
         position, and `on_candle_closed` is already scoped to one symbol.
         Also classifies the current volatility regime off these same
         `secure_timeframe` candles when `self._volatility_config` is set, so
         the volatility guard in `_manage` never needs a second market-data
-        round trip. Returns `(bases, regime, atr_value)`; `regime`/`atr_value`
-        are `(None, None)` whenever no `volatility_config` was supplied."""
+        round trip. Also detects fresh swing pivots (HH/HL/LH/LL) off this
+        same candle window when `self._structure_pivot_config` is set — the
+        structure-pivot rule reuses this fetch rather than opening a second
+        candle-access path (`engine/domain/structure_pivot.py`). Returns
+        `(bases, regime, atr_value, pivots)`; `regime`/`atr_value` are
+        `(None, None)` whenever no `volatility_config` was supplied, and
+        `pivots` is `[]` whenever no `structure_pivot_config` was supplied."""
         try:
             candles = await self._market_data.get_candles(
                 symbol, self._secure_timeframe, self._secure_lookback_bars
             )
         except MarketDataUnavailable:
-            return [], None, None
+            return [], None, None, []
         if len(candles) < DEFAULT_ATR_PERIOD * 2 + 10:
-            return [], None, None
+            return [], None, None, []
         opens_arr = np.array([c.open for c in candles])
         highs_arr = np.array([c.high for c in candles])
         lows_arr = np.array([c.low for c in candles])
@@ -271,7 +355,14 @@ class PositionManager:
                 high_percentile=self._volatility_config.high_percentile,
                 extreme_percentile=self._volatility_config.extreme_percentile,
             )
-        return bases, regime, atr_value
+
+        pivots: list[SwingPivot] = []
+        if self._structure_pivot_config is not None and self._structure_pivot_config.enabled:
+            times = [c.time for c in candles]
+            pivots = detect_swing_pivots(
+                highs_arr, lows_arr, times, pivot_bars=self._structure_pivot_config.pivot_bars
+            )
+        return bases, regime, atr_value, pivots
 
     async def _manage_pending_orders(self, symbol: str) -> None:
         pending = await self._order_service.get_pending_orders(symbol)
@@ -384,6 +475,31 @@ class PositionManager:
             return False
         return (candidate - current_sl) * direction > 0
 
+    @staticmethod
+    def _spread_clearing_buffer(info: SymbolInfo) -> float:
+        """Minimum SL offset from entry price, in price units, for any
+        "breakeven" or profit-lock candidate to be a genuine improvement
+        rather than a disguised loss.
+
+        A buy fills at the ask and closes (via SL) at the bid, `spread`
+        below it; an SL placed at exactly the entry price therefore still
+        realizes a small loss equal to the spread once it fills — this was
+        the bug (SL "secured" at open_price, position still closes red).
+        Clearing `spread_points * point` fixes that. But `stops_level` — the
+        broker's own minimum SL/TP distance from current price
+        (`broker/domain/broker_constraints.min_stop_distance`, the same
+        rule behind retcode=10016 "invalid stops") is frequently the larger
+        of the two on this account: e.g. XAUUSD's spread is typically
+        ~0.15-0.18 price units but its `stops_level` is ~0.20; Volatility 75
+        Index's spread is ~17 vs a `stops_level` of ~107.70. A buffer sized
+        to clear only the spread would still get the modify rejected on
+        those symbols, so this takes whichever of the two is larger, plus a
+        one-point safety margin so the result strictly clears both rather
+        than just tying them."""
+        spread = info.spread_points * info.point
+        stops_level_distance = min_stop_distance(info.stops_level, info.point)
+        return max(spread, stops_level_distance) + info.point
+
     def _exit_policy_for(self, position: Position) -> ExitPolicyConfig | None:
         """The give-back policy this position's bot should run under.
 
@@ -408,6 +524,7 @@ class PositionManager:
         info: SymbolInfo,
         regime: VolatilityRegime | None = None,
         atr_value: float | None = None,
+        pivots: list[SwingPivot] | None = None,
     ) -> None:
         if position.sl is None:
             return
@@ -460,20 +577,30 @@ class PositionManager:
         target_sl: float | None = None
         target_sl_reason: str | None = None
 
-        # Rule 1: breakeven at +1R.
+        # Rule 1: breakeven at +1R. The candidate must clear the spread (and
+        # the broker's stops_level minimum) — see `_spread_clearing_buffer` —
+        # not sit at the bare entry price, which still realizes a small loss
+        # equal to the spread once the SL fills on the opposite side of the
+        # book from entry.
         if risk > 0 and progress >= risk:
-            candidate = position.open_price
+            candidate = position.open_price + direction * self._spread_clearing_buffer(info)
             if self._improves(candidate, position.sl, direction):
                 target_sl = candidate
                 target_sl_reason = "breakeven at +1R"
 
         # Rule 2: secure a small real profit once a fresh base has been
         # cleared, and ratchet SL via structural continuation trailing if the
-        # cleared base sits further along in profit.
+        # cleared base sits further along in profit. The R-based buffer is
+        # floored at `_spread_clearing_buffer` so a tight-SL scalp (where
+        # risk * secure_buffer_r_mult can be smaller than the spread — real
+        # on this account, see `_spread_clearing_buffer`) still clears the
+        # spread rather than "securing" a stop that closes red.
         if risk > 0:
             secure_base = self._select_secure_base(bases, position.side, mark)
             if secure_base is not None:
-                buffer_price = risk * self._secure_buffer_r_mult
+                buffer_price = max(
+                    risk * self._secure_buffer_r_mult, self._spread_clearing_buffer(info)
+                )
                 candidate = position.open_price + direction * buffer_price
                 zone_trail_sl = (
                     secure_base.price_low - buffer_price
@@ -499,7 +626,10 @@ class PositionManager:
                     else mark - opposing_base.price_high
                 )
                 if distance <= 0.5 * risk:
-                    candidate = position.open_price + direction * risk * self._secure_buffer_r_mult
+                    buffer_price = max(
+                        risk * self._secure_buffer_r_mult, self._spread_clearing_buffer(info)
+                    )
+                    candidate = position.open_price + direction * buffer_price
                     if (mark - candidate) * direction > 0:
                         floor = target_sl if target_sl is not None else position.sl
                         if self._improves(candidate, floor, direction):
@@ -535,6 +665,7 @@ class PositionManager:
             and regime is VolatilityRegime.HIGH
             and risk > 0
             and self._volatility_config is not None
+            and atr_value is not None
             and progress >= self._volatility_config.chandelier_min_profit_r * risk
         ):
             atr_distance = self._volatility_config.chandelier_atr_mult * atr_value
@@ -544,7 +675,37 @@ class PositionManager:
                 target_sl = candidate
                 target_sl_reason = "volatility guard: HIGH-regime chandelier trail"
 
-        # Rule 6 (give-back): protect profit that was already earned. Runs
+        # Rule 6 (structure pivot): once this position's peak unrealized R
+        # proxies "a TP1/TP2 leg would have triggered by now" (`arm_r` — see
+        # `engine/domain/structure_pivot.py` for why this proxy is used
+        # instead of a literal sibling-ticket-closed check, which is not
+        # reliably available from live broker position data), ratchet SL to
+        # just beyond the most recent fresh swing pivot (HL for a buy, LH
+        # for a sell) formed since this position's own entry. Same
+        # target_sl/_improves merge as every rule above, so it never
+        # loosens a stop another rule already set.
+        if self._structure_pivot_config is not None and risk > 0:
+            candidate = decide_structure_pivot_exit(
+                is_buy=position.side is Side.BUY,
+                entry_price=position.open_price,
+                risk=risk,
+                peak_r_value=peak_r(
+                    is_buy=position.side is Side.BUY,
+                    entry_price=position.open_price,
+                    extreme_favorable=favorable,
+                    risk=risk,
+                ),
+                pivots=pivots or [],
+                entered_after=position.open_time,
+                config=self._structure_pivot_config,
+            )
+            if candidate is not None:
+                floor = target_sl if target_sl is not None else position.sl
+                if self._improves(candidate, floor, direction):
+                    target_sl = candidate
+                    target_sl_reason = "structure-pivot profit lock"
+
+        # Rule 7 (give-back): protect profit that was already earned. Runs
         # last so it sees whatever the rules above proposed and can only
         # tighten further — and it can also decide the position should be
         # closed outright, which no SL candidate can express.

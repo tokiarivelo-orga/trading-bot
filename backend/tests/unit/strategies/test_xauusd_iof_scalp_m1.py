@@ -39,14 +39,14 @@ from src.strategies.sandbox import validate_and_load
 
 CONTEXT_BARS = 200
 _STRATEGY_FILE = (
-    Path(__file__).resolve().parents[3]
-    / "src/strategies/generated/xauusd_iof_scalp_m1_v1.py"
+    Path(__file__).resolve().parents[3] / "src/strategies/generated/xauusd_iof_scalp_m1_v1.py"
 )
 
 
 # ─────────────────────────────────────────────────────────────────
 # Synthetic tape
 # ─────────────────────────────────────────────────────────────────
+
 
 def _tape(bars=900, seed=7, start_price=2000.0):
     """A deterministic tape with trend, mean reversion and impulses, so the
@@ -62,22 +62,27 @@ def _tape(bars=900, seed=7, start_price=2000.0):
         spread = abs(rng.normal(0, 0.25)) + 0.12
         open_ = price - rng.normal(0, 0.1)
         close = price
-        rows.append({
-            "time": pd.Timestamp("2026-03-02 00:00", tz=None) + pd.Timedelta(minutes=i),
-            "open": open_,
-            "high": max(open_, close) + spread,
-            "low": min(open_, close) - spread,
-            "close": close,
-            "tick_volume": int(80 + abs(rng.normal(0, 30))),
-        })
+        rows.append(
+            {
+                "time": pd.Timestamp("2026-03-02 00:00", tz=None) + pd.Timedelta(minutes=i),
+                "open": open_,
+                "high": max(open_, close) + spread,
+                "low": min(open_, close) - spread,
+                "close": close,
+                "tick_volume": int(80 + abs(rng.normal(0, 30))),
+            }
+        )
     return pd.DataFrame(rows)
 
 
 def _m15_from(m1):
-    grouped = m1.set_index("time").resample("15min").agg(
-        {"open": "first", "high": "max", "low": "min",
-         "close": "last", "tick_volume": "sum"}
-    ).dropna().reset_index()
+    grouped = (
+        m1.set_index("time")
+        .resample("15min")
+        .agg({"open": "first", "high": "max", "low": "min", "close": "last", "tick_volume": "sum"})
+        .dropna()
+        .reset_index()
+    )
     return grouped
 
 
@@ -87,13 +92,13 @@ def _walk(strategy, m1, m15, spread=25.0, bars=None, own_position=None):
     stop = len(m1) if bars is None else min(len(m1), CONTEXT_BARS + bars)
     m15_times = m15["time"].to_numpy()
     for i in range(CONTEXT_BARS, stop):
-        window = m1.iloc[i - CONTEXT_BARS:i].reset_index(drop=True)
+        window = m1.iloc[i - CONTEXT_BARS : i].reset_index(drop=True)
         cut = int(m15_times.searchsorted(window["time"].iloc[-1].to_datetime64(), "right"))
         ctx = MarketContext(
             symbol="XAUUSD",
             candles={
                 "M1": window,
-                "M15": m15.iloc[max(0, cut - CONTEXT_BARS):cut].reset_index(drop=True),
+                "M15": m15.iloc[max(0, cut - CONTEXT_BARS) : cut].reset_index(drop=True),
             },
             spread_points=spread,
             own_position=own_position,
@@ -114,24 +119,42 @@ def _with_engineered_fvg(m1, *, bullish, offset_from_last=4):
     if bullish:
         # low[-1] > high[-3]
         m1.loc[idx[-3], ["open", "high", "low", "close"]] = [
-            anchor - 0.5, anchor - 0.0, anchor - 0.7, anchor - 0.2,
+            anchor - 0.5,
+            anchor - 0.0,
+            anchor - 0.7,
+            anchor - 0.2,
         ]
         m1.loc[idx[-2], ["open", "high", "low", "close"]] = [
-            anchor + 0.2, anchor + 0.5, anchor + 0.0, anchor + 0.4,
+            anchor + 0.2,
+            anchor + 0.5,
+            anchor + 0.0,
+            anchor + 0.4,
         ]
         m1.loc[idx[-1], ["open", "high", "low", "close"]] = [
-            anchor + 0.8, anchor + 1.5, anchor + 1.0, anchor + 1.3,
+            anchor + 0.8,
+            anchor + 1.5,
+            anchor + 1.0,
+            anchor + 1.3,
         ]
     else:
         # high[-1] < low[-3]
         m1.loc[idx[-3], ["open", "high", "low", "close"]] = [
-            anchor + 0.5, anchor + 0.6, anchor + 0.0, anchor + 0.2,
+            anchor + 0.5,
+            anchor + 0.6,
+            anchor + 0.0,
+            anchor + 0.2,
         ]
         m1.loc[idx[-2], ["open", "high", "low", "close"]] = [
-            anchor - 0.2, anchor - 0.0, anchor - 0.5, anchor - 0.4,
+            anchor - 0.2,
+            anchor - 0.0,
+            anchor - 0.5,
+            anchor - 0.4,
         ]
         m1.loc[idx[-1], ["open", "high", "low", "close"]] = [
-            anchor - 0.8, anchor - 1.0, anchor - 1.5, anchor - 1.3,
+            anchor - 0.8,
+            anchor - 1.0,
+            anchor - 1.5,
+            anchor - 1.3,
         ]
     return m1, anchor
 
@@ -139,6 +162,7 @@ def _with_engineered_fvg(m1, *, bullish, offset_from_last=4):
 # ─────────────────────────────────────────────────────────────────
 # Contract
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_satisfies_the_strategy_protocol():
     assert isinstance(XauusdIofScalpM1(), Strategy)
@@ -162,25 +186,26 @@ def test_spec_declares_what_the_engine_needs_to_fetch():
 def test_returns_none_without_enough_history():
     strategy = XauusdIofScalpM1()
     tiny = _tape(bars=30)
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={"M1": tiny}, spread_points=20.0)
-    ) is None
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={}, spread_points=20.0)
-    ) is None
+    assert (
+        strategy.evaluate(MarketContext(symbol="XAUUSD", candles={"M1": tiny}, spread_points=20.0))
+        is None
+    )
+    assert strategy.evaluate(MarketContext(symbol="XAUUSD", candles={}, spread_points=20.0)) is None
 
 
 def test_frame_without_a_time_column_is_declined_not_crashed():
     strategy = XauusdIofScalpM1()
     frame = _tape(bars=300).drop(columns=["time"])
-    assert strategy.evaluate(
-        MarketContext(symbol="XAUUSD", candles={"M1": frame}, spread_points=20.0)
-    ) is None
+    assert (
+        strategy.evaluate(MarketContext(symbol="XAUUSD", candles={"M1": frame}, spread_points=20.0))
+        is None
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
 # Pure helpers — sessions / killzone
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_session_boundaries_match_the_engine():
     """Byte-identical to the base file — the killzone flag is a separate
@@ -218,6 +243,7 @@ def test_killzone_window_is_configurable():
 # Pure helpers — FVG detector
 # ─────────────────────────────────────────────────────────────────
 
+
 def _bar(open_, high, low, close, volume=100):
     return {"open": open_, "high": high, "low": low, "close": close, "tick_volume": volume}
 
@@ -244,8 +270,8 @@ def test_fvg_detector_finds_a_clean_bullish_gap():
 def test_fvg_detector_finds_a_clean_bearish_gap():
     rows = [_bar(100.0, 100.2, 99.8, 100.0) for _ in range(5)]
     rows.append(_bar(100.5, 101.0, 100.4, 100.8))  # i-2, low=100.4
-    rows.append(_bar(100.0, 100.3, 99.6, 99.8))    # i-1
-    rows.append(_bar(99.5, 99.9, 99.0, 99.2))       # i, high=99.9 < low[5]=100.4
+    rows.append(_bar(100.0, 100.3, 99.6, 99.8))  # i-1
+    rows.append(_bar(99.5, 99.9, 99.0, 99.2))  # i, high=99.9 < low[5]=100.4
     df = pd.DataFrame(rows)
     atr_series = pd.Series([0.3] * len(df))
     zones = _detect_fvg_zones(df, atr_series, {"fvg_min_gap_atr_mult": 0.05})
@@ -253,7 +279,7 @@ def test_fvg_detector_finds_a_clean_bearish_gap():
     assert len(bear) == 1
     zone = bear[0]
     assert zone["kind"] == ZoneKind.SUPPLY
-    assert zone["price_low"] == pytest.approx(99.9)   # high[i]
+    assert zone["price_low"] == pytest.approx(99.9)  # high[i]
     assert zone["price_high"] == pytest.approx(100.4)  # low[i-2]
 
 
@@ -311,15 +337,22 @@ def test_nearest_fvg_distance_prefers_same_direction_and_closest():
 
 def test_nearest_fvg_distance_falls_back_to_sentinel_when_none_exist():
     assert _nearest_fvg_distance_atr([], close=100.0, trade_dir=1, atr_val=1.0, sentinel=6.0) == 6.0
-    assert _nearest_fvg_distance_atr(
-        [{"source": "SND_V1", "kind": ZoneKind.DEMAND, "price_low": 99.0, "price_high": 99.4}],
-        close=100.0, trade_dir=1, atr_val=1.0, sentinel=6.0,
-    ) == 6.0
+    assert (
+        _nearest_fvg_distance_atr(
+            [{"source": "SND_V1", "kind": ZoneKind.DEMAND, "price_low": 99.0, "price_high": 99.4}],
+            close=100.0,
+            trade_dir=1,
+            atr_val=1.0,
+            sentinel=6.0,
+        )
+        == 6.0
+    )
 
 
 # ─────────────────────────────────────────────────────────────────
 # Pure helpers — volume-delta proxy / absorption
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_volume_delta_leans_toward_the_close():
     # Close at the high -> almost all buy volume.
@@ -402,6 +435,7 @@ def test_microstructure_state_arrays_are_finite_over_a_real_tape():
 # ExitDecision — thesis invalidation / continuation
 # ─────────────────────────────────────────────────────────────────
 
+
 def test_close_exit_decision_on_a_fresh_opposing_fvg():
     m1 = _tape(bars=250, seed=3)
     m1, anchor = _with_engineered_fvg(m1, bullish=False)  # bearish FVG, against a BUY
@@ -415,7 +449,9 @@ def test_close_exit_decision_on_a_fresh_opposing_fvg():
         opened_at=m1["time"].iloc[-10],
     )
     ctx = MarketContext(
-        symbol="XAUUSD", candles={"M1": m1, "M15": m15}, spread_points=25.0,
+        symbol="XAUUSD",
+        candles={"M1": m1, "M15": m15},
+        spread_points=25.0,
         own_position=own_position,
     )
     result = strategy.evaluate(ctx)
@@ -437,7 +473,9 @@ def test_breakeven_exit_decision_on_continuation_with_fresh_confluence():
         opened_at=m1["time"].iloc[-10],
     )
     ctx = MarketContext(
-        symbol="XAUUSD", candles={"M1": m1, "M15": m15}, spread_points=25.0,
+        symbol="XAUUSD",
+        candles={"M1": m1, "M15": m15},
+        spread_points=25.0,
         own_position=own_position,
     )
     result = strategy.evaluate(ctx)
@@ -452,7 +490,9 @@ def test_no_exit_decision_when_there_is_no_own_position():
     m15 = _m15_from(m1)
     strategy = XauusdIofScalpM1()
     ctx = MarketContext(
-        symbol="XAUUSD", candles={"M1": m1, "M15": m15}, spread_points=25.0,
+        symbol="XAUUSD",
+        candles={"M1": m1, "M15": m15},
+        spread_points=25.0,
         own_position=None,
     )
     result = strategy.evaluate(ctx)
@@ -471,11 +511,16 @@ def test_exit_decisions_can_be_switched_off():
     strategy = XauusdIofScalpM1()
     strategy.spec.params["exit_decisions_enabled"] = False
     own_position = PositionSnapshot(
-        direction=Direction.BUY, entry_price=anchor - 1.0, sl=anchor - 5.0,
-        tp=anchor + 5.0, opened_at=m1["time"].iloc[-10],
+        direction=Direction.BUY,
+        entry_price=anchor - 1.0,
+        sl=anchor - 5.0,
+        tp=anchor + 5.0,
+        opened_at=m1["time"].iloc[-10],
     )
     ctx = MarketContext(
-        symbol="XAUUSD", candles={"M1": m1, "M15": m15}, spread_points=25.0,
+        symbol="XAUUSD",
+        candles={"M1": m1, "M15": m15},
+        spread_points=25.0,
         own_position=own_position,
     )
     result = strategy.evaluate(ctx)
@@ -487,6 +532,7 @@ def test_exit_decisions_can_be_switched_off():
 # ─────────────────────────────────────────────────────────────────
 # End-to-end over a sliding window
 # ─────────────────────────────────────────────────────────────────
+
 
 def test_walks_a_real_sliding_window_and_emits_wellformed_signals():
     m1 = _tape()
@@ -518,8 +564,9 @@ def test_two_fresh_instances_agree_bar_for_bar():
         if isinstance(a, ExitDecision) or isinstance(b, ExitDecision):
             assert a == b
             continue
-        assert [(s.direction, s.sl_points, s.tp_points) for s in a] == \
-               [(s.direction, s.sl_points, s.tp_points) for s in b]
+        assert [(s.direction, s.sl_points, s.tp_points) for s in a] == [
+            (s.direction, s.sl_points, s.tp_points) for s in b
+        ]
 
 
 def test_learner_can_be_switched_off_for_a_controlled_ab():
@@ -532,7 +579,8 @@ def test_learner_can_be_switched_off_for_a_controlled_ab():
     assert strategy._learner is None
     assert any(
         "learner=off" in s.reason
-        for _b, sigs in events if not isinstance(sigs, ExitDecision)
+        for _b, sigs in events
+        if not isinstance(sigs, ExitDecision)
         for s in sigs
     )
 
@@ -549,8 +597,11 @@ def test_bucket_keys_carry_the_new_microstructure_tokens():
     m1 = _tape()
     events = _walk(XauusdIofScalpM1(), m1, _m15_from(m1))
     zone_events = [
-        s for _b, sigs in events if not isinstance(sigs, ExitDecision)
-        for s in sigs if s.pattern != "CHOCH"
+        s
+        for _b, sigs in events
+        if not isinstance(sigs, ExitDecision)
+        for s in sigs
+        if s.pattern != "CHOCH"
     ]
     assert zone_events
     # `learner_p_secure`/`learner_bucket_samples` readings prove the learner

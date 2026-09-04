@@ -13,15 +13,14 @@ sandbox allowlist.  It does NOT perform I/O beyond loading model weights
 at construction time (``__init__``).
 """
 
-import math
-import numpy as np
-import pandas as pd
-import torch
 from pathlib import Path
 
+import numpy as np
+import torch
+
 from src.strategies.domain.models import Direction, MarketContext, Signal, StrategySpec
-from src.strategies.generated.smc_dl_model import SmcMultiTaskNet
 from src.strategies.generated.smc_dl_features import compute_smc_features
+from src.strategies.generated.smc_dl_model import SmcMultiTaskNet
 
 
 # Resolve model artifacts in a way that works both during normal import
@@ -93,7 +92,7 @@ class SmcDlM5V1:
 
         try:
             features_dict = compute_smc_features(ctx.candles, ctx.symbol, lookback=20)
-        except Exception as e:
+        except Exception:
             return None
 
         if not features_dict:
@@ -103,9 +102,7 @@ class SmcDlM5V1:
         if len(feature_values) != len(self._scaler_mean):
             return None
 
-        x_scaled = (feature_values - self._scaler_mean) / np.clip(
-            self._scaler_scale, 1e-8, None
-        )
+        x_scaled = (feature_values - self._scaler_mean) / np.clip(self._scaler_scale, 1e-8, None)
         x_t = torch.FloatTensor(x_scaled).unsqueeze(0)
 
         with torch.no_grad():

@@ -96,15 +96,31 @@ async def test_the_outcome_is_stamped_on_the_same_signal_id_that_was_recorded():
 
 
 async def test_htf_veto_outcome():
+    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
+    # "BYPASSED PER USER REQUEST" logging) — the veto is still evaluated
+    # (hence still checked/recorded below) but no longer blocks the entry
+    # or stamps a final "htf_veto" outcome; the signal proceeds to "opened".
+    #
     # Buy signal against a downtrend on the veto timeframe (M15, one above M5).
     sink, order_service = await _run(
         market_data=FakeMarketData(bar_count=60, downtrend=True), context_bars=60
     )
 
-    assert order_service.opened == []
-    assert sink.final_outcome == "htf_veto"
-    assert "test buy — " in sink.outcomes[-1][2]
-    assert sink.check("htf_confirm").passed is False
+    assert len(order_service.opened) == 1
+    # The engine itself never stamps "opened" (see
+    # test_the_outcome_is_stamped_on_the_same_signal_id_that_was_recorded —
+    # that's the real OrderService's job, and FakeOrderService here doesn't
+    # do it either), and the bypassed veto no longer stamps "htf_veto"
+    # either, so `sink.outcomes` stays empty and `final_outcome` falls back
+    # to its "skipped" default — despite the trade actually opening, which
+    # `order_service.opened` above is the real proof of.
+    assert sink.final_outcome == "skipped"
+    # The bypassed path also always records this check as passed=True now,
+    # even when the veto actually failed (`_htf_check(passed=True)` is
+    # called unconditionally) — the decision trail no longer reflects the
+    # true HTF-confirm result on a vetoed signal, a side effect of the same
+    # bypass this test documents.
+    assert sink.check("htf_confirm").passed is True
 
 
 async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused():
@@ -118,6 +134,16 @@ async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused():
 
 
 async def test_max_open_positions_cap_outcome():
+    # The per-signal (multi-TP-leg) max-open-positions loop cap is
+    # intentionally bypassed — both its logic and its "max_positions"
+    # DecisionCheck/outcome recording are commented out (see trade_loop.py's
+    # "BYPASSED PER USER REQUEST" logging elsewhere in this same method):
+    # both TP targets now open even though the cap is 1, and no
+    # "max_positions" outcome is ever recorded for this candle. The only
+    # "open_positions" check still recorded is the top-level pretrade one
+    # (unconditionally passed=True now too), taken before either TP opens
+    # — value 0.0 (no existing positions), not the old per-TP "at cap"
+    # snapshot.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -136,23 +162,26 @@ async def test_max_open_positions_cap_outcome():
         risk_manager=RiskManager(caps=caps, timezone="UTC"),
     )
 
-    # TP1 fills (its outcome is the order service's job), TP2 hits the cap —
-    # which must not downgrade the decision away from "opened".
-    assert len(order_service.opened) == 1
-    assert sink.outcomes[-1][1] == "max_positions"
-    assert "at cap 1" in sink.outcomes[-1][2]
+    assert len(order_service.opened) == 2
+    assert not any(o[1] == "max_positions" for o in sink.outcomes)
     cap_check = sink.check("open_positions")
-    assert (cap_check.value, cap_check.threshold, cap_check.passed) == (1.0, 1.0, False)
+    assert (cap_check.value, cap_check.threshold, cap_check.passed) == (0.0, 1.0, True)
 
 
 async def test_risk_sizing_rejection_outcome():
+    # Risk-sizing rejection is intentionally bypassed too — see
+    # trade_loop.py's "BYPASSED PER USER REQUEST, USING MIN VOLUME"
+    # logging: its "risk_sizing" outcome recording is commented out and the
+    # entry opens anyway at the broker minimum volume, so the recorded
+    # "position_volume" check (sizing.volume >= volume_min) now always
+    # passes too, since sizing.volume was itself forced to volume_min.
+    #
     # A balance too small to fund even the minimum lot at this SL distance.
     sink, order_service = await _run(account=FakeAccountService(balance=1.0))
 
-    assert order_service.opened == []
-    assert sink.final_outcome == "risk_sizing"
-    assert "TP1:" in sink.outcomes[-1][2]
-    assert sink.check("position_volume").passed is False
+    assert len(order_service.opened) == 1
+    assert not any(o[1] == "risk_sizing" for o in sink.outcomes)
+    assert sink.check("position_volume").passed is True
 
 
 async def test_no_account_connected_is_recorded_as_skipped():
@@ -163,6 +192,15 @@ async def test_no_account_connected_is_recorded_as_skipped():
 
 
 async def test_volatility_guard_block_outcome():
+    # Engine-level EXTREME-regime volatility guard is intentionally bypassed
+    # (see trade_loop.py's "BYPASSED PER USER REQUEST" logging) — the
+    # EXTREME regime is still detected (percentile still reflects it below)
+    # but no longer blocks the entry or stamps a final "volatility_guard"
+    # outcome; the signal proceeds to "opened". The recorded check itself
+    # is also always passed=True now, unconditionally — see
+    # `_volatility_check(percentile, self._volatility_config, passed=True)`
+    # in trade_loop.py — so it no longer reflects the true pass/fail result
+    # either, the same side effect the HTF-veto test above documents.
     candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 40)
     config = VolatilityConfig(atr_period=5, regime_lookback_bars=30)
     sink, order_service = await _run(
@@ -173,12 +211,14 @@ async def test_volatility_guard_block_outcome():
         strategy_source=FakeStrategySource({"fake": FakeStrategy(BUY_SIGNAL, htf_veto=False)}),
     )
 
-    assert order_service.opened == []
-    assert sink.final_outcome == "volatility_guard"
-    assert "EXTREME" in sink.outcomes[-1][2]
+    assert len(order_service.opened) == 1
+    # Same "engine never stamps opened, bypass no longer stamps a
+    # rejection either" reasoning as test_htf_veto_outcome above —
+    # `final_outcome` falls back to "skipped" despite the trade opening.
+    assert sink.final_outcome == "skipped"
     guard = sink.check("volatility_percentile")
-    assert guard.passed is False
-    assert guard.value >= guard.threshold
+    assert guard.passed is True
+    assert guard.value >= guard.threshold  # percentile itself still reflects EXTREME
 
 
 async def test_broker_rejection_leaves_the_outcome_to_the_order_service():

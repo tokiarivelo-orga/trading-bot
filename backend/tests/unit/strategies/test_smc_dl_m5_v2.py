@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.strategies.domain.models import Direction, MarketContext
+from src.strategies.domain.models import MarketContext
 from src.strategies.generated.smc_dl_features_v2 import FEATURE_NAMES, atr, detect_zones
 from src.strategies.generated.smc_dl_m5_v2 import SmcDlM5V2
 from src.strategies.sandbox import validate_and_load
@@ -129,19 +129,43 @@ def _retest_frame(kind: str) -> pd.DataFrame:
     if kind == "demand":
         rows.append((price, price + 0.3, price - 0.3, price))  # base
         for step in range(1, 9):  # impulse up
-            rows.append((price + step * 2, price + step * 2 + 2.2, price + step * 2 - 0.2,
-                         price + step * 2 + 2.0))
+            rows.append(
+                (
+                    price + step * 2,
+                    price + step * 2 + 2.2,
+                    price + step * 2 - 0.2,
+                    price + step * 2 + 2.0,
+                )
+            )
         for step in range(8, 0, -1):  # walk back down to the base
-            rows.append((price + step * 2, price + step * 2 + 0.4, price + step * 2 - 2.2,
-                         price + step * 2 - 2.0))
+            rows.append(
+                (
+                    price + step * 2,
+                    price + step * 2 + 0.4,
+                    price + step * 2 - 2.2,
+                    price + step * 2 - 2.0,
+                )
+            )
     else:
         rows.append((price, price + 0.3, price - 0.3, price))  # base
         for step in range(1, 9):  # impulse down
-            rows.append((price - step * 2, price - step * 2 + 0.2, price - step * 2 - 2.2,
-                         price - step * 2 - 2.0))
+            rows.append(
+                (
+                    price - step * 2,
+                    price - step * 2 + 0.2,
+                    price - step * 2 - 2.2,
+                    price - step * 2 - 2.0,
+                )
+            )
         for step in range(8, 0, -1):  # walk back up to the base
-            rows.append((price - step * 2, price - step * 2 + 2.2, price - step * 2 - 0.4,
-                         price - step * 2 + 2.0))
+            rows.append(
+                (
+                    price - step * 2,
+                    price - step * 2 + 2.2,
+                    price - step * 2 - 0.4,
+                    price - step * 2 + 2.0,
+                )
+            )
     times = pd.date_range("2025-06-01", periods=len(rows), freq="5min", tz="UTC")
     frame = pd.DataFrame(rows, columns=["open", "high", "low", "close"])
     frame["time"] = times
@@ -200,8 +224,16 @@ def test_structural_veto_blocks_buying_into_unmitigated_supply() -> None:
     strategy = SmcDlM5V2()
     params = strategy.spec.params
     zones = [
-        {"kind": "supply", "price_low": 100.5, "price_high": 103.0, "index": 5,
-         "age_bars": 5, "touches": 0, "in_zone": False, "fresh_touch": False},
+        {
+            "kind": "supply",
+            "price_low": 100.5,
+            "price_high": 103.0,
+            "index": 5,
+            "age_bars": 5,
+            "touches": 0,
+            "in_zone": False,
+            "fresh_touch": False,
+        },
     ]
     assert strategy._veto_opposing_zone(zones, True, 100.0, 1.0, params) is True
     # Same supply far out of reach must not veto.
@@ -213,8 +245,16 @@ def test_structural_veto_blocks_buying_into_unmitigated_supply() -> None:
 def test_structural_veto_blocks_selling_into_unmitigated_demand() -> None:
     strategy = SmcDlM5V2()
     zones = [
-        {"kind": "demand", "price_low": 97.0, "price_high": 99.5, "index": 5,
-         "age_bars": 5, "touches": 0, "in_zone": False, "fresh_touch": False},
+        {
+            "kind": "demand",
+            "price_low": 97.0,
+            "price_high": 99.5,
+            "index": 5,
+            "age_bars": 5,
+            "touches": 0,
+            "in_zone": False,
+            "fresh_touch": False,
+        },
     ]
     assert strategy._veto_opposing_zone(zones, False, 100.0, 1.0, strategy.spec.params) is True
 
@@ -225,8 +265,16 @@ def test_only_a_fresh_touch_qualifies() -> None:
     equivalent M1 work, versus 5.5% with the guard."""
     strategy = SmcDlM5V2()
     params = strategy.spec.params
-    stale = {"kind": "demand", "price_low": 99.0, "price_high": 101.0, "index": 10,
-             "age_bars": 20, "touches": 1, "in_zone": True, "fresh_touch": False}
+    stale = {
+        "kind": "demand",
+        "price_low": 99.0,
+        "price_high": 101.0,
+        "index": 10,
+        "age_bars": 20,
+        "touches": 1,
+        "in_zone": True,
+        "fresh_touch": False,
+    }
     assert strategy._select_retest([stale], 100.0, params) is None
     fresh = dict(stale, fresh_touch=True)
     assert strategy._select_retest([fresh], 100.0, params) is not None
@@ -235,8 +283,16 @@ def test_only_a_fresh_touch_qualifies() -> None:
 def test_overtested_and_too_young_zones_are_skipped() -> None:
     strategy = SmcDlM5V2()
     params = strategy.spec.params
-    base = {"kind": "demand", "price_low": 99.0, "price_high": 101.0, "index": 10,
-            "age_bars": 20, "touches": 0, "in_zone": True, "fresh_touch": True}
+    base = {
+        "kind": "demand",
+        "price_low": 99.0,
+        "price_high": 101.0,
+        "index": 10,
+        "age_bars": 20,
+        "touches": 0,
+        "in_zone": True,
+        "fresh_touch": True,
+    }
     assert strategy._select_retest([dict(base, touches=9)], 100.0, params) is None
     assert strategy._select_retest([dict(base, age_bars=0)], 100.0, params) is None
 

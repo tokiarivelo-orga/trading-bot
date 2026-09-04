@@ -72,23 +72,7 @@ export function toSeriesMarkers(
   colors: { ok: string; err: string },
   showLabels = true,
 ): SeriesMarker<Time>[] {
-  const markers: SeriesMarker<Time>[] = [];
-  for (const t of trades) {
-    if (t.close_time !== null) {
-      markers.push({
-        time: t.close_time as UTCTimestamp,
-        position: 'inBar',
-        color: (t.profit ?? 0) >= 0 ? colors.ok : colors.err,
-        shape: 'circle',
-        text:
-          t.profit !== null
-            ? `${t.profit >= 0 ? '+' : ''}${t.profit.toFixed(2)}`
-            : 'close',
-      });
-    }
-  }
-  // The markers plugin requires ascending time order.
-  return markers.sort((a, b) => (a.time as number) - (b.time as number));
+  return [];
 }
 
 /** Entry->exit oblique line for each closed live trade (LIVE_TRADE_DRAWING_PREFIX)
@@ -140,17 +124,7 @@ export function toBacktestSeriesMarkers(
   colors: { ok: string; err: string },
   showLabels = true,
 ): SeriesMarker<Time>[] {
-  const markers: SeriesMarker<Time>[] = [];
-  for (const t of trades) {
-    markers.push({
-      time: t.close_time as UTCTimestamp,
-      position: 'inBar',
-      color: t.profit >= 0 ? colors.ok : colors.err,
-      shape: 'circle',
-      text: `${t.profit >= 0 ? '+' : ''}${t.profit.toFixed(2)}`,
-    });
-  }
-  return markers.sort((a, b) => (a.time as number) - (b.time as number));
+  return [];
 }
 
 /** Square markers for the report's signals that did NOT become trades

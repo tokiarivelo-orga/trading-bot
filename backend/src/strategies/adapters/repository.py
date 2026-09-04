@@ -39,9 +39,7 @@ class StrategyVersionRepository:
         link (§ StrategyVersionService.delete_version)."""
         with self._session_factory() as session:
             children = session.scalars(
-                select(StrategyVersionRow).where(
-                    StrategyVersionRow.parent_version_id == version_id
-                )
+                select(StrategyVersionRow).where(StrategyVersionRow.parent_version_id == version_id)
             ).all()
             for child in children:
                 child.parent_version_id = None

@@ -53,7 +53,7 @@ import {
 } from 'lightweight-charts';
 import { DrawingManager, type IDrawing } from 'lightweight-charts-drawing';
 import type { Candle } from '@/shared/api/client';
-import { cssVar, hexToRgba } from './chartFormat';
+import { cssVar, hexToRgba, getLocalTimeZoneOptions } from './chartFormat';
 import { isProgrammaticDrawingId, loadDrawingsFromStorage } from './chartStorage';
 import { FUTURE_RIGHT_OFFSET } from './useCandleData';
 import type { ChartEngineController, DrawingToolType, ZoneMeta } from './types';
@@ -123,6 +123,7 @@ export function useChartEngine(params: UseChartEngineParams) {
     if (!container) return;
 
     const line = cssVar('--color-line');
+    const timeZoneOpts = getLocalTimeZoneOptions();
     const chart = createChart(container, {
       layout: {
         background: { color: cssVar('--color-panel') },
@@ -145,7 +146,9 @@ export function useChartEngine(params: UseChartEngineParams) {
         // `render()` appends to the series, which is what actually makes
         // that space's coordinates resolvable by the drawing tools.
         rightOffset: FUTURE_RIGHT_OFFSET,
+        tickMarkFormatter: timeZoneOpts.timeScale.tickMarkFormatter,
       },
+      localization: timeZoneOpts.localization,
       rightPriceScale: { borderColor: line },
     });
 

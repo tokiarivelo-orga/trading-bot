@@ -177,8 +177,8 @@ function TradesTable({
             <Td className={getBannerClass(t)}>{t.symbol}</Td>
             <Td className={t.side === "buy" ? "text-ok" : "text-err"}>{t.side}</Td>
             <Td align="right">{t.volume}</Td>
-            <Td>{formatTime(t.open_time)}</Td>
-            <Td>{t.close_time !== null ? formatTime(t.close_time) : "—"}</Td>
+            <Td><TimeCell epochSeconds={t.open_time} /></Td>
+            <Td><TimeCell epochSeconds={t.close_time} /></Td>
             <Td align="right">{t.open_price}</Td>
             <Td align="right">{t.close_price ?? "—"}</Td>
             <Td className="text-ink-muted">{t.close_reason ?? "—"}</Td>
@@ -189,13 +189,13 @@ function TradesTable({
               {t.mfe != null ? t.mfe.toFixed(5) : "—"}
             </Td>
             <Td className="text-ink-muted text-xs">
-              {t.mfe_time != null ? formatTime(t.mfe_time) : "—"}
+              <TimeCell epochSeconds={t.mfe_time} />
             </Td>
             <Td align="right" className="text-err">
               {t.mae != null ? t.mae.toFixed(5) : "—"}
             </Td>
             <Td className="text-ink-muted text-xs">
-              {t.mae_time != null ? formatTime(t.mae_time) : "—"}
+              <TimeCell epochSeconds={t.mae_time} />
             </Td>
             <Td className="text-ink-muted">{t.strategy_version ?? "—"}</Td>
             <Td className="text-ink-muted">{t.skill ?? "—"}</Td>
@@ -247,8 +247,37 @@ function getBannerClass(t: TradeHistoryItem): string {
   return isSl ? "border-l-4 border-l-[#ff9800]" : "border-l-4 border-l-ok";
 }
 
-function formatTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().replace("T", " ").slice(0, 16);
+function formatBrokerTime(epochSeconds: number): string {
+  // Since the backend treats MT5 broker time as UTC when converting to epoch,
+  // formatting as UTC correctly displays the broker time string.
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, { 
+    timeZone: "UTC",
+    year: "2-digit", 
+    month: "short", 
+    day: "numeric", 
+    hour: "2-digit", 
+    minute: "2-digit" 
+  });
+}
+
+function formatLocalTime(epochSeconds: number): string {
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, { 
+    year: "2-digit", 
+    month: "short", 
+    day: "numeric", 
+    hour: "2-digit", 
+    minute: "2-digit" 
+  });
+}
+
+function TimeCell({ epochSeconds }: { epochSeconds: number | null }) {
+  if (epochSeconds === null) return <span>—</span>;
+  return (
+    <div className="flex flex-col gap-0.5 whitespace-nowrap">
+      <span title="Broker Time (Terminal)">{formatBrokerTime(epochSeconds)} <span className="text-[9px] text-ink-muted uppercase">Broker</span></span>
+      <span title="Your Local Time" className="text-[11px] text-ink-muted">{formatLocalTime(epochSeconds)} <span className="text-[9px] uppercase opacity-70">Local</span></span>
+    </div>
+  );
 }
 
 function Td({

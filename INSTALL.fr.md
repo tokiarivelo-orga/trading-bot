@@ -142,7 +142,10 @@ Dans l'ordre :
 - **`.env`** — créé à partir de `.env.example` s'il n'existe pas encore,
   avec un `TB_GATEWAY_SHARED_SECRET` fraîchement généré. Chaque compte
   au-delà du tout premier reçoit son propre
-  `TB_GATEWAY_SHARED_SECRET_<ID>` généré.
+  `TB_GATEWAY_SHARED_SECRET_<ID>` généré. Pour tout ce que vous pourriez
+  vouloir régler d'autre dans `.env` (clés de fournisseurs IA, identifiants
+  d'alerte, `TB_APP_PASSWORD`) et comment obtenir chaque valeur, voir
+  [`SECRETS.fr.md`](SECRETS.fr.md).
 - **`configs/accounts.yaml`** — un nouveau bloc ajouté par nouveau compte,
   respectant exactement le format existant du fichier. Un id déjà présent
   n'est jamais modifié.

@@ -325,8 +325,8 @@ class SkillAssignmentService:
         if not remaining_bots:
             from src.shared.config.app_config_writer import remove_symbol_from_app_config
             await asyncio.to_thread(remove_symbol_from_app_config, symbol, self._configs_dir)
-            if self._candle_stream:
-                self._candle_stream.remove_symbol(symbol)
+            for candle_stream in self._candle_streams:
+                candle_stream.remove_symbol(symbol)
             logger.info("symbol %s removed from automated trading because its last bot was deleted", symbol)
             
         logger.info("bot %s removed from %s", bot_slug, symbol)

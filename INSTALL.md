@@ -132,6 +132,9 @@ In order:
 - **`.env`** — created from `.env.example` if it doesn't exist yet, with a
   freshly generated `TB_GATEWAY_SHARED_SECRET`. Every account beyond the
   true first one gets its own generated `TB_GATEWAY_SHARED_SECRET_<ID>`.
+  For everything else you might want to set in `.env` (AI provider keys,
+  alerting credentials, `TB_APP_PASSWORD`) and how to obtain each value,
+  see [`SECRETS.md`](SECRETS.md).
 - **`configs/accounts.yaml`** — one new block appended per new account,
   matching the file's existing formatting exactly. An id that already
   exists is never modified.

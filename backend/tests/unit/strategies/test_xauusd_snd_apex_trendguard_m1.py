@@ -69,6 +69,7 @@ def _trending(n: int, start: float, drift: float, step: timedelta) -> pd.DataFra
 # Spec
 # ─────────────────────────────────────────────────────────────────────
 
+
 def test_spec_requests_native_higher_timeframes() -> None:
     """The whole point of the rebuild: M5/M15/H1 arrive as real 200-bar
     windows instead of a resample of the M1 context."""
@@ -94,6 +95,7 @@ def test_strategy_loads_in_the_sandbox() -> None:
 # Trend / structure gating
 # ─────────────────────────────────────────────────────────────────────
 
+
 def test_timeframe_trend_reads_direction() -> None:
     step = timedelta(minutes=5)
     assert _timeframe_trend(_trending(120, 100.0, 0.10, step), 21, 55, 3) == 1
@@ -107,12 +109,16 @@ def test_timeframe_trend_is_flat_without_enough_history() -> None:
 
 def test_structure_bias_matches_the_labels() -> None:
     up = [
-        {"label": StructureLabel.HL}, {"label": StructureLabel.HH},
-        {"label": StructureLabel.HL}, {"label": StructureLabel.HH},
+        {"label": StructureLabel.HL},
+        {"label": StructureLabel.HH},
+        {"label": StructureLabel.HL},
+        {"label": StructureLabel.HH},
     ]
     down = [
-        {"label": StructureLabel.LH}, {"label": StructureLabel.LL},
-        {"label": StructureLabel.LH}, {"label": StructureLabel.LL},
+        {"label": StructureLabel.LH},
+        {"label": StructureLabel.LL},
+        {"label": StructureLabel.LH},
+        {"label": StructureLabel.LL},
     ]
     assert _structure_bias(up, 4) == 1
     assert _structure_bias(down, 4) == -1
@@ -141,6 +147,7 @@ def test_detect_structure_labels_a_rising_market() -> None:
 # ─────────────────────────────────────────────────────────────────────
 # Zone lifecycle
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _lifecycle(zone: dict, closes: list[float], max_inside: int = 20) -> dict:
     n = len(closes)
@@ -188,6 +195,7 @@ def test_inside_now_is_false_when_price_is_away_from_the_zone() -> None:
 # Zone Respect Index
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _zri_params(**over) -> dict:
     base = {
         "zri_horizon_bars": 10,
@@ -217,10 +225,14 @@ def test_zri_collapses_when_zones_are_closed_straight_through() -> None:
         # a supply zone at [price+1, price+2] that price then closes above
         for _ in range(3):
             bars.append({"o": price, "h": price + 2.0, "l": price - 0.3, "c": price})
-        zones.append({
-            "kind": ZoneKind.SUPPLY, "price_low": price + 1.0, "price_high": price + 2.0,
-            "leg_out_end": base + 2,
-        })
+        zones.append(
+            {
+                "kind": ZoneKind.SUPPLY,
+                "price_low": price + 1.0,
+                "price_high": price + 2.0,
+                "leg_out_end": base + 2,
+            }
+        )
         for _ in range(4):
             price += 1.5
             bars.append({"o": price - 1.5, "h": price + 0.3, "l": price - 1.8, "c": price})
@@ -241,10 +253,14 @@ def test_zri_rewards_zones_that_actually_reverse_price() -> None:
         base = len(bars)
         for _ in range(3):
             bars.append({"o": 100.0, "h": 100.3, "l": 99.0, "c": 100.0})
-        zones.append({
-            "kind": ZoneKind.DEMAND, "price_low": 99.0, "price_high": 100.0,
-            "leg_out_end": base + 2,
-        })
+        zones.append(
+            {
+                "kind": ZoneKind.DEMAND,
+                "price_low": 99.0,
+                "price_high": 100.0,
+                "leg_out_end": base + 2,
+            }
+        )
         # price returns to the zone and then rallies far above it
         bars.append({"o": 100.0, "h": 100.2, "l": 99.5, "c": 99.8})
         for _ in range(4):
@@ -258,6 +274,7 @@ def test_zri_rewards_zones_that_actually_reverse_price() -> None:
 # ─────────────────────────────────────────────────────────────────────
 # Entry confirmation
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _candle(o: float, h: float, low: float, c: float):
     return (np.array([o]), np.array([h]), np.array([low]), np.array([c]))
@@ -356,6 +373,7 @@ def test_percentile_rank_bounds() -> None:
 # End-to-end: the strategy must stay silent when the gates say no
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _context(entry: pd.DataFrame, m5: pd.DataFrame, m15: pd.DataFrame, h1: pd.DataFrame):
     return MarketContext(
         symbol="XAUUSD",
@@ -453,7 +471,7 @@ def test_detect_zones_v1_records_the_departure_impulse() -> None:
     bars = []
     for _ in range(20):
         bars.append({"o": 100.0, "h": 100.6, "l": 99.4, "c": 100.4})
-    bars.append({"o": 100.4, "h": 101.4, "l": 100.3, "c": 101.2})   # leg-in
+    bars.append({"o": 100.4, "h": 101.4, "l": 100.3, "c": 101.2})  # leg-in
     bars.append({"o": 101.2, "h": 102.1, "l": 101.1, "c": 102.0})
     bars.append({"o": 102.0, "h": 102.1, "l": 101.8, "c": 101.95})  # base
     bars.append({"o": 101.95, "h": 102.85, "l": 101.9, "c": 102.75})  # leg-out
@@ -477,14 +495,15 @@ def test_detect_zones_v1_records_the_departure_impulse() -> None:
 # Volatility-shock / news guard
 # ─────────────────────────────────────────────────────────────────────
 
+
 def test_shock_detector_finds_a_range_explosion_and_ages_it() -> None:
     from src.strategies.generated.xauusd_snd_apex_trendguard_m1_v1 import _bars_since_shock
 
     highs = np.full(200, 100.5)
-    lows = np.full(200, 100.0)          # calm tape: range 0.5 everywhere
+    lows = np.full(200, 100.0)  # calm tape: range 0.5 everywhere
     assert _bars_since_shock(highs, lows, 120, 5.0) is None
 
-    highs[190] = 110.0                  # one bar with a 10.0 range = 20x median
+    highs[190] = 110.0  # one bar with a 10.0 range = 20x median
     assert _bars_since_shock(highs, lows, 120, 5.0) == 9
     highs[199] = 110.0
     assert _bars_since_shock(highs, lows, 120, 5.0) == 0

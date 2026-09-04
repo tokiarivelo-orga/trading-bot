@@ -79,5 +79,5 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function formatTime(epochSeconds: number): string {
-  return new Date(epochSeconds * 1000).toISOString().replace("T", " ").slice(0, 16);
+  return new Date(epochSeconds * 1000).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }

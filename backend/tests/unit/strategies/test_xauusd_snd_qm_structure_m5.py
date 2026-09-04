@@ -209,8 +209,26 @@ def test_detect_quasimodo_zones_finds_bullish_failure_swing() -> None:
     bars: list[dict] = []
     # Build a simple zig-zag with clear local extrema, generous ATR margin.
     seq = [
-        100, 99, 98, 95, 96, 98, 100, 102, 105, 103,
-        100, 98, 97, 99, 101, 103, 100, 101, 102, 103,
+        100,
+        99,
+        98,
+        95,
+        96,
+        98,
+        100,
+        102,
+        105,
+        103,
+        100,
+        98,
+        97,
+        99,
+        101,
+        103,
+        100,
+        101,
+        102,
+        103,
     ]
     for i, p in enumerate(seq):
         bars.append(_bar(i, p, p + 0.3, p - 0.3, p))

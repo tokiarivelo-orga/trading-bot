@@ -61,9 +61,7 @@ def test_no_signal_when_market_is_trending_not_ranging():
     opens = list(closes)
     highs = [c + 0.1 for c in closes]
     lows = [c - 0.1 for c in closes]
-    signal = ScalpBollingerReversionV2().evaluate(
-        _ctx(opens, highs, lows, closes, [100.0] * N)
-    )
+    signal = ScalpBollingerReversionV2().evaluate(_ctx(opens, highs, lows, closes, [100.0] * N))
     assert signal is None
 
 
@@ -72,9 +70,7 @@ def test_no_signal_with_insufficient_history():
     opens = list(closes)
     highs = [c + 0.1 for c in closes]
     lows = [c - 0.1 for c in closes]
-    signal = ScalpBollingerReversionV2().evaluate(
-        _ctx(opens, highs, lows, closes, [100.0] * 10)
-    )
+    signal = ScalpBollingerReversionV2().evaluate(_ctx(opens, highs, lows, closes, [100.0] * 10))
     assert signal is None
 
 

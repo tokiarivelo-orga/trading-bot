@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine
@@ -278,3 +278,101 @@ async def test_reconcile_pending_fill_returns_false_when_no_match(journal):
     filled = await reconciliation.reconcile_pending_fill("XAUUSD", 5, Side.BUY, 0.1)
 
     assert filled is False
+
+
+async def test_unresolved_ticket_logs_warning_within_the_loud_window(journal, caplog):
+    # A ticket that's been unresolved for a few seconds — well inside
+    # `_LOUD_RETRY_WINDOW` — should still log at WARNING every pass, same as
+    # before this feature existed.
+    broker = FakeBroker(open_positions=[], close_info={})
+    event_bus = EventBus()
+    now = datetime(2026, 8, 20, 12, 0, 0, tzinfo=UTC)
+    reconciliation = ReconciliationService(
+        broker=broker, journal=journal, event_bus=event_bus, clock=lambda: now
+    )
+
+    with caplog.at_level("DEBUG"):
+        await reconciliation.reconcile_vanished("XAUUSD", {1})
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "ticket=1" in warnings[0].message
+
+
+async def test_unresolved_ticket_downgrades_to_debug_after_the_loud_window(journal, caplog):
+    # Root cause of the 2026-08-20 incident: a permanently-unresolvable
+    # ticket (a stale paper-mode position id, never known to the live
+    # gateway) retried every few seconds forever, each attempt logging a
+    # fresh WARNING — ~20k rows in under 4 hours. Past `_LOUD_RETRY_WINDOW`
+    # the same ticket must fall back to DEBUG so it stops flooding the
+    # activity log, while `reconcile_vanished` keeps actually retrying (a
+    # ticket that resolves late, as real ones did that day, must still be
+    # caught automatically).
+    broker = FakeBroker(open_positions=[], close_info={})
+    event_bus = EventBus()
+    current = datetime(2026, 8, 20, 12, 0, 0, tzinfo=UTC)
+    reconciliation = ReconciliationService(
+        broker=broker, journal=journal, event_bus=event_bus, clock=lambda: current
+    )
+
+    with caplog.at_level("DEBUG"):
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # first sighting: loud
+        current += timedelta(minutes=15)  # past the 10-minute loud window
+        caplog.clear()
+        await reconciliation.reconcile_vanished("XAUUSD", {1})
+
+    levels = {r.levelname for r in caplog.records}
+    assert levels == {"DEBUG"}
+
+
+async def test_unresolved_ticket_gets_a_periodic_warning_reminder(journal, caplog):
+    broker = FakeBroker(open_positions=[], close_info={})
+    event_bus = EventBus()
+    current = datetime(2026, 8, 20, 12, 0, 0, tzinfo=UTC)
+    reconciliation = ReconciliationService(
+        broker=broker, journal=journal, event_bus=event_bus, clock=lambda: current
+    )
+
+    with caplog.at_level("DEBUG"):
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # first sighting: loud
+        current += timedelta(minutes=15)  # quiet (DEBUG) window
+        caplog.clear()
+        await reconciliation.reconcile_vanished("XAUUSD", {1})
+        assert {r.levelname for r in caplog.records} == {"DEBUG"}
+
+        current += timedelta(minutes=30)  # past the 30-minute reminder interval
+        caplog.clear()
+        await reconciliation.reconcile_vanished("XAUUSD", {1})
+
+    assert [r.levelname for r in caplog.records] == ["WARNING"]
+
+
+async def test_resolved_ticket_clears_its_unresolved_tracking(journal, caplog):
+    # A ticket that goes stale, resolves, then later (unlikely, but a real
+    # ticket id could in principle be reused) goes stale again must get a
+    # fresh loud window rather than inheriting timing from its first
+    # go-round — otherwise it would start out already downgraded to DEBUG.
+    close_info = ClosedPositionInfo(
+        symbol="XAUUSD", price=2390.0, time=datetime.now(UTC), profit=-10.0
+    )
+    broker = FakeBroker(open_positions=[], close_info={})
+    event_bus = EventBus()
+    current = datetime(2026, 8, 20, 12, 0, 0, tzinfo=UTC)
+    reconciliation = ReconciliationService(
+        broker=broker, journal=journal, event_bus=event_bus, clock=lambda: current
+    )
+
+    with caplog.at_level("DEBUG"):
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # unresolved, loud
+        current += timedelta(minutes=15)
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # unresolved, quiet now
+
+        broker._close_info[1] = close_info
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # resolves
+
+        del broker._close_info[1]
+        current += timedelta(seconds=1)
+        caplog.clear()
+        await reconciliation.reconcile_vanished("XAUUSD", {1})  # unresolved again
+
+    assert [r.levelname for r in caplog.records] == ["WARNING"]

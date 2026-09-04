@@ -61,6 +61,7 @@ from src.strategies.domain.models import (
 # ATR / EMA helpers
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _true_range(df):
     prev_close = df["close"].shift(1)
     return pd.concat(
@@ -96,6 +97,7 @@ def _percentile_rank(series_values, current):
 # Volatility-shock guard (the calendar proxy)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _bars_since_shock(highs, lows, lookback, mult):
     """How many entry-TF bars ago the last abnormal range expansion was,
     or None if there hasn't been one in the visible window.
@@ -127,7 +129,7 @@ def _bars_since_shock(highs, lows, lookback, mult):
     if n < lookback + 2:
         return None
     ranges = highs - lows
-    median = float(np.median(ranges[n - lookback: n]))
+    median = float(np.median(ranges[n - lookback : n]))
     if median <= 0:
         return None
     threshold = mult * median
@@ -140,6 +142,7 @@ def _bars_since_shock(highs, lows, lookback, mult):
 # ─────────────────────────────────────────────────────────────────────
 # Trend state — one signed vote per timeframe
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _timeframe_trend(frame, fast_span, slow_span, slope_bars):
     """+1 up / -1 down / 0 flat for one timeframe.
@@ -198,6 +201,7 @@ def _trend_state(ctx, params):
 # Supply & Demand V1: classic leg-base-leg (RBR / DBD / RBD / DBR)
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _classify_bars(closes, opens, atr_filled, base_mult):
     body = np.abs(closes - opens)
     return np.where(body <= base_mult * atr_filled, 0, np.where(closes >= opens, 1, -1))
@@ -218,6 +222,7 @@ def _make_is_leg(closes, opens, atr_filled, leg_mult):
     def is_leg(run):
         cls, start, end = run
         return cls != 0 and abs(closes[end] - opens[start]) >= leg_mult * atr_filled[end]
+
     return is_leg
 
 
@@ -233,7 +238,7 @@ def _merge_weak_runs(runs, is_leg, max_base):
                 continue
             if is_leg(d1) and is_leg(d2):
                 continue
-            runs[k: k + 3] = [[d1[0], d1[1], d2[2]]]
+            runs[k : k + 3] = [[d1[0], d1[1], d2[2]]]
             merged = True
             break
     return runs
@@ -273,8 +278,8 @@ def _detect_zones_v1(df, atr_series, params):
         base_count = base_end - base_start + 1
         if base_count < 1 or base_count > max_base:
             continue
-        price_high = float(highs[base_start: base_end + 1].max())
-        price_low = float(lows[base_start: base_end + 1].min())
+        price_high = float(highs[base_start : base_end + 1].max())
+        price_low = float(lows[base_start : base_end + 1].min())
         leg_out_up = leg_out[0] == 1
         conf_idx = None
         for j in range(leg_out[1], leg_out[2] + 1):
@@ -290,24 +295,27 @@ def _detect_zones_v1(df, atr_series, params):
             pattern = "RBR" if leg_out_up else "RBD"
         else:
             pattern = "DBR" if leg_out_up else "DBD"
-        zones.append({
-            "source": "SND_V1",
-            "pattern": pattern,
-            "kind": ZoneKind.DEMAND if leg_out_up else ZoneKind.SUPPLY,
-            "price_high": price_high,
-            "price_low": price_low,
-            "base_start": base_start,
-            "conf_idx": conf_idx,
-            "leg_out_end": leg_out[2],
-            "impulse_atr": (impulse / atr_at) if atr_at > 0 else 0.0,
-            "base_count": base_count,
-        })
+        zones.append(
+            {
+                "source": "SND_V1",
+                "pattern": pattern,
+                "kind": ZoneKind.DEMAND if leg_out_up else ZoneKind.SUPPLY,
+                "price_high": price_high,
+                "price_low": price_low,
+                "base_start": base_start,
+                "conf_idx": conf_idx,
+                "leg_out_end": leg_out[2],
+                "impulse_atr": (impulse / atr_at) if atr_at > 0 else 0.0,
+                "base_count": base_count,
+            }
+        )
     return zones
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Supply & Demand V2: engulfing-base departure zones
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _detect_zones_v2(df, atr_series, params):
     """Engulf -> base -> departure order blocks.
@@ -356,8 +364,8 @@ def _detect_zones_v2(df, atr_series, params):
         if dep_idx >= n:
             break
 
-        price_high = float(max(highs[i], highs[base_start: base_end].max()))
-        price_low = float(min(lows[i], lows[base_start: base_end].min()))
+        price_high = float(max(highs[i], highs[base_start:base_end].max()))
+        price_low = float(min(lows[i], lows[base_start:base_end].min()))
         impulse = abs(float(closes[dep_idx]) - float(opens[dep_idx]))
         common = {
             "source": "SND_V2",
@@ -382,14 +390,15 @@ def _detect_zones_v2(df, atr_series, params):
 # Quasimodo
 # ─────────────────────────────────────────────────────────────────────
 
+
 def _detect_swing_points(highs, lows, lookback):
     n = len(highs)
     swings = []
     for i in range(lookback, n - lookback):
-        window_highs = highs[i - lookback: i + lookback + 1]
+        window_highs = highs[i - lookback : i + lookback + 1]
         if highs[i] == window_highs.max() and int(np.sum(window_highs == highs[i])) == 1:
             swings.append((i, float(highs[i]), "high"))
-        window_lows = lows[i - lookback: i + lookback + 1]
+        window_lows = lows[i - lookback : i + lookback + 1]
         if lows[i] == window_lows.min() and int(np.sum(window_lows == lows[i])) == 1:
             swings.append((i, float(lows[i]), "low"))
     swings.sort(key=lambda s: s[0])
@@ -421,10 +430,22 @@ def _detect_quasimodo_zones(df, atr_series, params):
     zones = []
     for idx in range(len(swings) - 3):
         s1, s2, s3, s4 = swings[idx], swings[idx + 1], swings[idx + 2], swings[idx + 3]
-        bull = (s1[2] == "low" and s2[2] == "high" and s3[2] == "low" and s4[2] == "high"
-                and s3[1] < s1[1] and s4[1] < s2[1])
-        bear = (s1[2] == "high" and s2[2] == "low" and s3[2] == "high" and s4[2] == "low"
-                and s3[1] > s1[1] and s4[1] > s2[1])
+        bull = (
+            s1[2] == "low"
+            and s2[2] == "high"
+            and s3[2] == "low"
+            and s4[2] == "high"
+            and s3[1] < s1[1]
+            and s4[1] < s2[1]
+        )
+        bear = (
+            s1[2] == "high"
+            and s2[2] == "low"
+            and s3[2] == "high"
+            and s4[2] == "low"
+            and s3[1] > s1[1]
+            and s4[1] > s2[1]
+        )
         if not (bull or bear):
             continue
         swing_range = abs(s2[1] - s3[1])
@@ -444,24 +465,27 @@ def _detect_quasimodo_zones(df, atr_series, params):
             zone_high = mid + max_height / 2.0
             zone_low = mid - max_height / 2.0
 
-        zones.append({
-            "source": "QUASIMODO",
-            "pattern": "QM_BULL" if bull else "QM_BEAR",
-            "kind": ZoneKind.DEMAND if bull else ZoneKind.SUPPLY,
-            "price_high": zone_high,
-            "price_low": zone_low,
-            "base_start": zone_idx,
-            "conf_idx": s4[0],
-            "leg_out_end": s4[0],
-            "impulse_atr": swing_range / atr_at,
-            "base_count": 1,
-        })
+        zones.append(
+            {
+                "source": "QUASIMODO",
+                "pattern": "QM_BULL" if bull else "QM_BEAR",
+                "kind": ZoneKind.DEMAND if bull else ZoneKind.SUPPLY,
+                "price_high": zone_high,
+                "price_low": zone_low,
+                "base_start": zone_idx,
+                "conf_idx": s4[0],
+                "leg_out_end": s4[0],
+                "impulse_atr": swing_range / atr_at,
+                "base_count": 1,
+            }
+        )
     return zones
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Market structure (HH / HL / LH / LL)
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _detect_structure(highs, lows, lookback):
     swings = _detect_swing_points(highs, lows, lookback)
@@ -488,7 +512,7 @@ def _structure_bias(labelled, depth):
     signal and then ignored: bias=up scored 63.7% WR / +$709.81 on
     2026-08-05 while bias=down scored 5.9% WR / -$1580.08.
     """
-    recent = labelled[len(labelled) - depth:] if len(labelled) > depth else labelled
+    recent = labelled[len(labelled) - depth :] if len(labelled) > depth else labelled
     up = sum(1 for s in recent if s["label"] in (StructureLabel.HH, StructureLabel.HL))
     down = sum(1 for s in recent if s["label"] in (StructureLabel.LL, StructureLabel.LH))
     if up > down:
@@ -501,6 +525,7 @@ def _structure_bias(labelled, depth):
 # ─────────────────────────────────────────────────────────────────────
 # Zone lifecycle on the entry timeframe
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _zone_lifecycle(zone, zone_end_time, entry_times, highs, lows, closes, max_bars_inside):
     """Life story of one zone since it was created.
@@ -520,8 +545,13 @@ def _zone_lifecycle(zone, zone_end_time, entry_times, highs, lows, closes, max_b
     """
     start = int(np.searchsorted(entry_times, zone_end_time, side="left"))
     if start >= len(entry_times):
-        return {"dead": False, "dead_reason": "", "inside_now": False,
-                "episodes": 0, "bars_inside": 0}
+        return {
+            "dead": False,
+            "dead_reason": "",
+            "inside_now": False,
+            "episodes": 0,
+            "bars_inside": 0,
+        }
 
     demand = zone["kind"] == ZoneKind.DEMAND
     low = zone["price_low"]
@@ -534,8 +564,13 @@ def _zone_lifecycle(zone, zone_end_time, entry_times, highs, lows, closes, max_b
     # Hard break: a close beyond the far side.
     broke = (seg_close < low) if demand else (seg_close > high)
     if bool(np.any(broke)):
-        return {"dead": True, "dead_reason": "closed through far side", "inside_now": False,
-                "episodes": 0, "bars_inside": 0}
+        return {
+            "dead": True,
+            "dead_reason": "closed through far side",
+            "inside_now": False,
+            "episodes": 0,
+            "bars_inside": 0,
+        }
 
     # Interaction = the bar overlapped the rectangle at all.
     touching = (seg_high >= low) & (seg_low <= high)
@@ -553,16 +588,27 @@ def _zone_lifecycle(zone, zone_end_time, entry_times, highs, lows, closes, max_b
     # Eaten: price has loitered inside the rectangle so long that whatever
     # unfilled interest created it is gone, even without a clean break.
     if bars_inside > max_bars_inside:
-        return {"dead": True, "dead_reason": f"eaten ({bars_inside} closes inside)",
-                "inside_now": inside_now, "episodes": episodes, "bars_inside": bars_inside}
+        return {
+            "dead": True,
+            "dead_reason": f"eaten ({bars_inside} closes inside)",
+            "inside_now": inside_now,
+            "episodes": episodes,
+            "bars_inside": bars_inside,
+        }
 
-    return {"dead": False, "dead_reason": "", "inside_now": inside_now,
-            "episodes": episodes, "bars_inside": bars_inside}
+    return {
+        "dead": False,
+        "dead_reason": "",
+        "inside_now": inside_now,
+        "episodes": episodes,
+        "bars_inside": bars_inside,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────
 # Zone Respect Index — the adaptive regime read
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _zone_respect_index(zones, frame, atr_value, params):
     """Are zones of each kind actually holding on this symbol right now?
@@ -643,7 +689,7 @@ def _zone_respect_index(zones, frame, atr_value, params):
     index = {}
     for kind in (ZoneKind.DEMAND, ZoneKind.SUPPLY):
         cases = sorted(outcomes[kind], key=lambda c: c[0])
-        cases = cases[len(cases) - sample_cap:] if len(cases) > sample_cap else cases
+        cases = cases[len(cases) - sample_cap :] if len(cases) > sample_cap else cases
         if len(cases) < min_samples:
             index[kind] = (1.0, len(cases))
             continue
@@ -655,6 +701,7 @@ def _zone_respect_index(zones, frame, atr_value, params):
 # ─────────────────────────────────────────────────────────────────────
 # Entry confirmation on the M5 candle
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _confirmation(zone, opens, highs, lows, closes, atr_value, params):
     """Does the last M5 candle agree with the trade?
@@ -717,9 +764,7 @@ def _confirmation(zone, opens, highs, lows, closes, atr_value, params):
     wick_frac = wick / bar_range
     min_wick = float(params["confirm_wick_frac"])
     if body < min_body and wick_frac < min_wick:
-        return False, (
-            f"body {body:.2f}<{min_body:.2f} and wick {wick_frac:.2f}<{min_wick:.2f}"
-        )
+        return False, (f"body {body:.2f}<{min_body:.2f} and wick {wick_frac:.2f}<{min_wick:.2f}")
 
     return True, f"strict body={body / atr_value:.2f}atr wick={wick_frac:.2f}"
 
@@ -727,6 +772,7 @@ def _confirmation(zone, opens, highs, lows, closes, atr_value, params):
 # ─────────────────────────────────────────────────────────────────────
 # Candidate scoring
 # ─────────────────────────────────────────────────────────────────────
+
 
 def _score_zone(zone, depth, height_atr, age_bars, overlaps, params):
     """Rank surviving candidates so the best one trades, not the first one.
@@ -766,6 +812,7 @@ def _overlap_count(zone, others):
 # Strategy
 # ─────────────────────────────────────────────────────────────────────
 
+
 class XauusdSndApexTrendguardM5:
     def __init__(self) -> None:
         self.spec = StrategySpec(
@@ -790,7 +837,6 @@ class XauusdSndApexTrendguardM5:
                 "zone_timeframe": "M15",
                 "htf_zone_timeframe": "H1",
                 "atr_period": 14,
-
                 # ── Zone detection ──
                 "base_body_atr_mult": 0.5,
                 "leg_travel_atr_mult": 0.8,
@@ -805,7 +851,6 @@ class XauusdSndApexTrendguardM5:
                 "qm_requires_confluence": True,
                 "structure_swing_lookback": 3,
                 "structure_depth": 4,
-
                 # ── Candidate ranking ──
                 # Source weights are the 2026-08-05 P&L by detector, ranked:
                 # SND_V1 +$98.36, QUASIMODO -$225.59, SND_V2 -$730.43. The
@@ -817,7 +862,6 @@ class XauusdSndApexTrendguardM5:
                 "score_depth_weight": 1.20,
                 "score_width_weight": 0.50,
                 "score_age_weight": 0.40,
-
                 # ── Trend gate ──
                 "trend_ema_fast": 21,
                 "trend_ema_slow": 55,
@@ -856,14 +900,12 @@ class XauusdSndApexTrendguardM5:
                 "counter_trend_min_rr": 2.5,
                 "counter_trend_max_age_bars": 12,
                 "counter_trend_zri_min": 0.55,
-
                 # ── Zone Respect Index (adaptive regime read) ──
                 "zri_horizon_bars": 12,
                 "zri_reversal_atr": 1.0,
                 "zri_sample": 12,
                 "zri_min_samples": 4,
                 "zri_min": 0.40,
-
                 # ── Zone quality gates ──
                 # 2026-08-05: height 3-4 USD 53.7% WR / +$366 vs height
                 # 6-9 USD 10.4% WR / -$1074. Expressed in ATR so it travels
@@ -888,7 +930,6 @@ class XauusdSndApexTrendguardM5:
                 # inside a M15-sized rectangle for a good while before
                 # resolving.
                 "max_bars_inside": 20,
-
                 # ── M5 entry confirmation ──
                 # Both thresholds are measured against the *zone*-timeframe
                 # ATR, so 0.35 of a M15 ATR is a real rejection candle on
@@ -897,7 +938,6 @@ class XauusdSndApexTrendguardM5:
                 "confirm_mode": "light",
                 "confirm_body_atr_mult": 0.35,
                 "confirm_wick_frac": 0.20,
-
                 # ── Stop loss ──
                 "sl_zone_buffer_atr_mult": 0.20,
                 "sl_zone_buffer_zone_frac": 0.10,
@@ -905,7 +945,6 @@ class XauusdSndApexTrendguardM5:
                 # SL 4-5 USD: 22.5% WR / -$516.14. Past this the setup is
                 # skipped rather than sized down into a bad stop.
                 "sl_max_atr_mult": 2.20,
-
                 # ── Take profit ──
                 # The broker-side spread/RR gate (`SpreadGate.check`, symbol
                 # config `min_rr`, default 1.5) rejects any order whose TP
@@ -924,7 +963,6 @@ class XauusdSndApexTrendguardM5:
                 # before filling 80% of the time.
                 "tp_frontrun_r_mult": 0.60,
                 "tp_buffer_atr_mult": 0.30,
-
                 # ── Volatility adaptation ──
                 "vol_lookback": 100,
                 "vol_low_pct": 0.20,
@@ -940,7 +978,6 @@ class XauusdSndApexTrendguardM5:
                 # hardcoded session window, so it keeps working when the
                 # session that matters moves.
                 "min_atr_median_frac": 0.55,
-
                 # ── Volatility-shock / news guard ──
                 "shock_guard_enabled": True,
                 "shock_lookback_bars": 120,
@@ -949,7 +986,6 @@ class XauusdSndApexTrendguardM5:
                 # around a range shock and sat out 15 M1 bars for it;
                 # 6 M5 bars is the same window here.
                 "shock_cooldown_bars": 6,
-
                 # ── Execution ──
                 "max_spread_r_frac": 0.12,
                 "point_value": 0.01,
@@ -1015,7 +1051,7 @@ class XauusdSndApexTrendguardM5:
 
         history_all = atr_series.dropna().to_numpy()
         lookback = int(params["vol_lookback"])
-        history = history_all[max(0, len(history_all) - lookback - 1): len(history_all) - 1]
+        history = history_all[max(0, len(history_all) - lookback - 1) : len(history_all) - 1]
         vol_pct = _percentile_rank(history, atr_value)
         median_atr = float(np.median(history)) if len(history) > 0 else 0.0
 
@@ -1031,8 +1067,13 @@ class XauusdSndApexTrendguardM5:
         zri = _zone_respect_index(zones, zone_frame, atr_value, params)
 
         bundle = {
-            "vol_pct": vol_pct, "median_atr": median_atr, "trend_score": trend_score,
-            "votes": votes, "structure": structure, "bias": bias, "zri": zri,
+            "vol_pct": vol_pct,
+            "median_atr": median_atr,
+            "trend_score": trend_score,
+            "votes": votes,
+            "structure": structure,
+            "bias": bias,
+            "zri": zri,
             "ema_anchor": ema_anchor,
         }
         self._regime_cache = (key, bundle)
@@ -1054,8 +1095,10 @@ class XauusdSndApexTrendguardM5:
         # M5 entry a good idea.
         if params["shock_guard_enabled"]:
             since = _bars_since_shock(
-                entry["high"].to_numpy(), entry["low"].to_numpy(),
-                int(params["shock_lookback_bars"]), float(params["shock_range_mult"]),
+                entry["high"].to_numpy(),
+                entry["low"].to_numpy(),
+                int(params["shock_lookback_bars"]),
+                float(params["shock_range_mult"]),
             )
             if since is not None and since < int(params["shock_cooldown_bars"]):
                 self._reject("shock_cooldown")
@@ -1075,9 +1118,7 @@ class XauusdSndApexTrendguardM5:
         htf_frame = ctx.candles.get(htf_tf)
         htf_zones, _ = self._zones_for(htf_frame, htf_tf, params)
 
-        regime_bundle = self._regime(
-            ctx, params, zone_frame, zones, atr_value, zone_meta["series"]
-        )
+        regime_bundle = self._regime(ctx, params, zone_frame, zones, atr_value, zone_meta["series"])
 
         # ── Volatility regime (adaptive sizing + stand-down) ──────────
         vol_pct = regime_bundle["vol_pct"]
@@ -1133,7 +1174,12 @@ class XauusdSndApexTrendguardM5:
                 continue
             created_end_ns = int(zone_times[created]) + bar_ns
             life = _zone_lifecycle(
-                zone, created_end_ns, entry_times, highs, lows, closes,
+                zone,
+                created_end_ns,
+                entry_times,
+                highs,
+                lows,
+                closes,
                 int(params["max_bars_inside"]),
             )
             if life["dead"]:
@@ -1150,8 +1196,11 @@ class XauusdSndApexTrendguardM5:
             if height <= 0:
                 continue
             height_atr = height / atr_value
-            if not (float(params["zone_height_atr_min"]) <= height_atr
-                    <= float(params["zone_height_atr_max"])):
+            if not (
+                float(params["zone_height_atr_min"])
+                <= height_atr
+                <= float(params["zone_height_atr_max"])
+            ):
                 self._reject("zone_height")
                 continue
 
@@ -1177,11 +1226,19 @@ class XauusdSndApexTrendguardM5:
                 self._reject("qm_no_confluence")
                 continue
 
-            candidates.append({
-                "zone": zone, "depth": max(depth, 0.0), "height": height,
-                "height_atr": height_atr, "age_bars": age_bars, "overlaps": overlaps,
-                "score": _score_zone(zone, max(depth, 0.0), height_atr, age_bars, overlaps, params),
-            })
+            candidates.append(
+                {
+                    "zone": zone,
+                    "depth": max(depth, 0.0),
+                    "height": height,
+                    "height_atr": height_atr,
+                    "age_bars": age_bars,
+                    "overlaps": overlaps,
+                    "score": _score_zone(
+                        zone, max(depth, 0.0), height_atr, age_bars, overlaps, params
+                    ),
+                }
+            )
 
         if not candidates:
             return None
@@ -1191,9 +1248,29 @@ class XauusdSndApexTrendguardM5:
         signals = []
         for candidate in candidates:
             built = self._build_signals(
-                candidate, live, ctx, params, close, now, atr_value, sl_scale, tp_scale,
-                trend_score, trend_min, votes, bias, zri, zri_min, regime, vol_pct,
-                opens, highs, lows, closes, structure, zone_frame,
+                candidate,
+                live,
+                ctx,
+                params,
+                close,
+                now,
+                atr_value,
+                sl_scale,
+                tp_scale,
+                trend_score,
+                trend_min,
+                votes,
+                bias,
+                zri,
+                zri_min,
+                regime,
+                vol_pct,
+                opens,
+                highs,
+                lows,
+                closes,
+                structure,
+                zone_frame,
                 regime_bundle["ema_anchor"],
             )
             if built:
@@ -1203,10 +1280,33 @@ class XauusdSndApexTrendguardM5:
 
         return tuple(signals) if signals else None
 
-    def _build_signals(self, candidate, live, ctx, params, close, now, atr_value,
-                       sl_scale, tp_scale, trend_score, trend_min, votes, bias,
-                       zri, zri_min, regime, vol_pct, opens, highs, lows, closes,
-                       structure, zone_frame, ema_anchor):
+    def _build_signals(
+        self,
+        candidate,
+        live,
+        ctx,
+        params,
+        close,
+        now,
+        atr_value,
+        sl_scale,
+        tp_scale,
+        trend_score,
+        trend_min,
+        votes,
+        bias,
+        zri,
+        zri_min,
+        regime,
+        vol_pct,
+        opens,
+        highs,
+        lows,
+        closes,
+        structure,
+        zone_frame,
+        ema_anchor,
+    ):
         zone = candidate["zone"]
         demand = zone["kind"] == ZoneKind.DEMAND
         direction = Direction.BUY if demand else Direction.SELL
@@ -1215,9 +1315,7 @@ class XauusdSndApexTrendguardM5:
         # ── Gate 1: Zone Respect Index for this side of the book ──────
         zri_value, zri_n = zri.get(zone["kind"], (1.0, 0))
         counter_trend = (trend_score * want) <= -trend_min
-        effective_zri_min = (
-            float(params["counter_trend_zri_min"]) if counter_trend else zri_min
-        )
+        effective_zri_min = float(params["counter_trend_zri_min"]) if counter_trend else zri_min
         if zri_value < effective_zri_min:
             self._reject("zone_respect_index")
             return None
@@ -1300,9 +1398,7 @@ class XauusdSndApexTrendguardM5:
             fatigue_note = ""
 
         # ── Gate 4: the M5 candle must actually reject the zone ───────
-        confirmed, confirm_note = _confirmation(
-            zone, opens, highs, lows, closes, atr_value, params
-        )
+        confirmed, confirm_note = _confirmation(zone, opens, highs, lows, closes, atr_value, params)
         if not confirmed:
             self._reject(f"confirm:{confirm_note.split()[0]}")
             return None
@@ -1335,13 +1431,9 @@ class XauusdSndApexTrendguardM5:
         tp_buffer = max(frontrun, atr_value * float(params["tp_buffer_atr_mult"]))
         opposing = [z for z in live if z["kind"] != zone["kind"]]
         if demand:
-            ahead = sorted(
-                [z["price_low"] - close for z in opposing if z["price_low"] > close]
-            )
+            ahead = sorted([z["price_low"] - close for z in opposing if z["price_low"] > close])
         else:
-            ahead = sorted(
-                [close - z["price_high"] for z in opposing if z["price_high"] < close]
-            )
+            ahead = sorted([close - z["price_high"] for z in opposing if z["price_high"] < close])
         ceiling = (ahead[0] - tp_buffer) if ahead else None
 
         tp1 = risk * float(params["tp1_target_rr"]) * tp_scale
@@ -1355,8 +1447,7 @@ class XauusdSndApexTrendguardM5:
         # scalp leg is dropped rather than emitted unfillable.
         broker_floor = risk * float(params["broker_min_rr"])
         min_rr = (
-            float(params["counter_trend_min_rr"]) if counter_trend
-            else float(params["tp2_min_rr"])
+            float(params["counter_trend_min_rr"]) if counter_trend else float(params["tp2_min_rr"])
         )
         if tp2 < max(risk * min_rr, broker_floor):
             self._reject("min_rr")
@@ -1379,28 +1470,43 @@ class XauusdSndApexTrendguardM5:
                 price=s["price"],
                 label=s["label"],
             )
-            for s in structure[len(structure) - 4:]
+            for s in structure[len(structure) - 4 :]
         )
         readings = (
             IndicatorReading(
-                name="trend_score", value=round(trend_score, 2), threshold=trend_min,
-                comparison=">" if want > 0 else "<", passed=True,
+                name="trend_score",
+                value=round(trend_score, 2),
+                threshold=trend_min,
+                comparison=">" if want > 0 else "<",
+                passed=True,
             ),
             IndicatorReading(
-                name=f"zri_{zone['kind'].value}", value=round(zri_value, 2),
-                threshold=effective_zri_min, comparison=">", passed=True,
+                name=f"zri_{zone['kind'].value}",
+                value=round(zri_value, 2),
+                threshold=effective_zri_min,
+                comparison=">",
+                passed=True,
             ),
             IndicatorReading(
-                name="zone_height_atr", value=round(candidate["height_atr"], 2),
-                threshold=float(params["zone_height_atr_max"]), comparison="<", passed=True,
+                name="zone_height_atr",
+                value=round(candidate["height_atr"], 2),
+                threshold=float(params["zone_height_atr_max"]),
+                comparison="<",
+                passed=True,
             ),
             IndicatorReading(
-                name="entry_depth", value=round(candidate["depth"], 2),
-                threshold=float(params["max_entry_depth"]), comparison="<", passed=True,
+                name="entry_depth",
+                value=round(candidate["depth"], 2),
+                threshold=float(params["max_entry_depth"]),
+                comparison="<",
+                passed=True,
             ),
             IndicatorReading(
-                name="vol_pct", value=round(vol_pct, 2),
-                threshold=float(params["vol_extreme_pct"]), comparison="<", passed=True,
+                name="vol_pct",
+                value=round(vol_pct, 2),
+                threshold=float(params["vol_extreme_pct"]),
+                comparison="<",
+                passed=True,
             ),
         )
 

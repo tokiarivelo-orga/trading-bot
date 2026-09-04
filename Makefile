@@ -207,6 +207,10 @@ walk-forward-backtest: ## Run a walk-forward backtest (independent out-of-sample
 train-dl: ## Entraînement automatique du modèle Deep Learning (SMC): make train-dl
 	cd backend && uv run python scripts/run_smc_dl_loop.py
 
+.PHONY: train-regime-router-priors
+train-regime-router-priors: ## Train the regime-router prior_logit priors (per session/trend bucket) from trading.db closed trades: make train-regime-router-priors
+	cd backend && uv run python scripts/train_regime_router_priors.py
+
 .PHONY: seed-indicators
 seed-indicators: ## Seed the 15 PoB pattern/confirmation indicators into the indicator DB (safe to re-run)
 	cd backend && uv run python -m scripts.seed_pob_indicators

@@ -3,7 +3,14 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 
-from src.broker.domain.trading import ExecutionResult, OrderType, PendingOrder, Position, Side
+from src.broker.domain.trading import (
+    ExecutionResult,
+    OrderRejected,
+    OrderType,
+    PendingOrder,
+    Position,
+    Side,
+)
 from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.domain.models import RiskCaps
@@ -123,6 +130,27 @@ class FakeOrderService:
     async def cancel_pending_order(self, ticket: int) -> None:
         self.pending_cancelled.append(ticket)
         self._pending = [p for p in self._pending if p.ticket != ticket]
+
+
+class RejectingOrderService(FakeOrderService):
+    """`FakeOrderService` whose `modify_position` raises `OrderRejected` for
+    a chosen set of tickets — models the live retcode=10016 "invalid stops"
+    rejection (the proposed SL sits inside the symbol's stops_level distance
+    from price) that `on_candle_closed` must survive without aborting the
+    rest of the candle's position management."""
+
+    def __init__(self, positions: list[Position], reject_tickets: set[int]) -> None:
+        super().__init__(positions)
+        self._reject_tickets = reject_tickets
+
+    async def modify_position(self, ticket: int, sl, tp, reason: str = "") -> None:
+        if ticket in self._reject_tickets:
+            raise OrderRejected(
+                f"position_modify({ticket}) rejected: retcode=10016 — invalid stops — "
+                "sl/tp too close to price (see symbol's stops_level) [1] Success",
+                retcode=10016,
+            )
+        await super().modify_position(ticket, sl, tp, reason)
 
 
 class FakeReconciliation:
@@ -326,15 +354,79 @@ async def test_apply_strategy_action_breakeven_respects_sell_direction():
     assert order_service.modified == []
 
 
+async def test_apply_strategy_action_set_sl_moves_to_target_price():
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(
+        position,
+        ExitDecision(action=ExitActionKind.SET_SL, reason="leg TP1 cleared", target_price=2408.0),
+    )
+
+    assert order_service.modified == [(1, 2408.0, 2420.0)]
+    assert order_service.modify_reasons == ["leg TP1 cleared"]
+    assert order_service.closed == []
+
+
+async def test_apply_strategy_action_set_sl_never_loosens_an_already_tighter_sl():
+    # Same never-loosen invariant BREAKEVEN obeys via `_improves` — a
+    # SET_SL request must not move SL backward from a level already
+    # tightened past it (e.g. by an earlier ratchet leg or `_manage`).
+    position = _position(open_price=2400.0, sl=2412.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(
+        position, ExitDecision(action=ExitActionKind.SET_SL, target_price=2408.0)
+    )
+
+    assert order_service.modified == []
+
+
+async def test_apply_strategy_action_set_sl_ignored_when_target_price_missing():
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(position, ExitDecision(action=ExitActionKind.SET_SL))
+
+    assert order_service.modified == []
+
+
+async def test_apply_strategy_action_set_sl_respects_sell_direction():
+    # For a SELL, SET_SL only improves when it moves SL *down* toward the
+    # candidate; a candidate above the current SL must not be applied.
+    position = _position(side=Side.SELL, open_price=2400.0, sl=2395.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.apply_strategy_action(
+        position, ExitDecision(action=ExitActionKind.SET_SL, target_price=2398.0)
+    )
+    assert order_service.modified == []
+
+    await manager.apply_strategy_action(
+        position, ExitDecision(action=ExitActionKind.SET_SL, target_price=2392.0)
+    )
+    assert order_service.modified == [(1, 2392.0, 2420.0)]
+
+
 async def test_moves_sl_to_breakeven_once_risk_is_covered():
-    # risk = open(2400) - sl(2390) = 10; bid(2410) - open(2400) = 10 >= risk
+    # risk = open(2400) - sl(2390) = 10; bid(2410) - open(2400) = 10 >= risk.
+    # Candidate is entry + a buffer that clears both the spread
+    # (spread_points(20)*point(0.01) = 0.20) and stops_level
+    # (stops_level(10)*point(0.01) = 0.10) -- the larger, 0.20, plus a
+    # one-point safety margin (0.01) -> 2400.0 + 0.21 = 2400.21, never the
+    # bare entry price (see the breakeven-buffer tests below for why that
+    # would still realize a small loss).
     position = _position(open_price=2400.0, sl=2390.0)
     order_service = FakeOrderService([position])
     manager = PositionManager(order_service, FakeMarketData())
 
     await manager.on_candle_closed("XAUUSD")
 
-    assert order_service.modified == [(1, 2400.0, 2420.0)]
+    assert order_service.modified == [(1, 2400.21, 2420.0)]
     assert order_service.closed == []
 
 
@@ -343,6 +435,76 @@ async def test_does_not_move_sl_before_risk_is_covered():
     position = _position(open_price=2400.0, sl=2380.0)
     order_service = FakeOrderService([position])
     manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert order_service.modified == []
+
+
+# ---- breakeven-at-+1R spread/stops_level buffer (Rule 1) --------------------
+
+
+async def test_breakeven_buffer_clears_spread_for_buy():
+    # A BUY fills at the ask and its SL closes it at the bid, spread(0.20)
+    # below the ask entry -- a "breakeven" candidate at the bare entry price
+    # (2400.0) would still realize a small loss once filled. The candidate
+    # must sit strictly above entry by at least the spread.
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert len(order_service.modified) == 1
+    ticket, sl, _tp = order_service.modified[0]
+    assert ticket == 1
+    spread = INFO.spread_points * INFO.point
+    assert sl > position.open_price + spread, (
+        "breakeven candidate must clear the spread, not just equal entry price"
+    )
+    assert sl == 2400.21
+
+
+async def test_breakeven_buffer_clears_spread_for_sell():
+    # Mirror of the buy case: a SELL fills at the bid and closes at the ask,
+    # spread above the bid entry -- the candidate must sit strictly below
+    # entry by at least the spread.
+    position = _position(side=Side.SELL, open_price=2400.0, sl=2410.0, tp=2380.0)
+    info = replace(INFO, bid=2389.8, ask=2390.0)  # progress = 2400-2390=10 >= risk(10)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData(info=info))
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert len(order_service.modified) == 1
+    ticket, sl, _tp = order_service.modified[0]
+    assert ticket == 1
+    spread = INFO.spread_points * INFO.point
+    assert sl < position.open_price - spread, (
+        "breakeven candidate must clear the spread, not just equal entry price"
+    )
+    assert sl == 2399.79
+
+
+async def test_breakeven_buffer_still_never_loosens_an_already_tighter_sl_buy():
+    # SL already tightened past the breakeven-buffer candidate (e.g. by
+    # secure-base trailing on an earlier candle) -- the buffered Rule 1
+    # candidate (2400.21) must not loosen it back down.
+    position = _position(open_price=2400.0, sl=2405.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert order_service.modified == []
+
+
+async def test_breakeven_buffer_still_never_loosens_an_already_tighter_sl_sell():
+    # Mirror for a SELL: SL already tightened below the buffered candidate.
+    position = _position(side=Side.SELL, open_price=2400.0, sl=2395.0, tp=2380.0)
+    info = replace(INFO, bid=2389.8, ask=2390.0)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData(info=info))
 
     await manager.on_candle_closed("XAUUSD")
 
@@ -376,8 +538,9 @@ async def test_get_symbol_info_fetched_once_per_symbol_with_multiple_positions()
     await manager.on_candle_closed("XAUUSD")
 
     assert market_data.symbol_info_calls == ["XAUUSD"]
-    # both positions were still managed off that single fetched info
-    assert order_service.modified == [(1, 2400.0, 2420.0), (2, 2400.0, 2420.0)]
+    # both positions were still managed off that single fetched info -- see
+    # test_moves_sl_to_breakeven_once_risk_is_covered for the 2400.21 buffer math
+    assert order_service.modified == [(1, 2400.21, 2420.0), (2, 2400.21, 2420.0)]
 
 
 # ---- secure-on-base-clear (bot-agnostic profit protection) -------------------
@@ -751,7 +914,9 @@ async def test_disabled_volatility_guard_skips_high_regime_chandelier_rule():
     # test_high_regime_running_profit_applies_chandelier_trailing_stop, but
     # with the live guard switched off -- no chandelier trailing, and since
     # progress(15) >= risk(10), only the plain +1R breakeven candidate
-    # (2400.0) is available among the ordinary SL-tightening rules.
+    # (2400.21, entry + spread/stops_level buffer -- see
+    # test_moves_sl_to_breakeven_once_risk_is_covered) is available among
+    # the ordinary SL-tightening rules.
     candles = _volatility_ramp_candles(45, last_frac=0.85)
     position = _position(open_price=2400.0, sl=2390.0)
     info = replace(INFO, bid=2415.0, ask=2415.2)
@@ -762,7 +927,7 @@ async def test_disabled_volatility_guard_skips_high_regime_chandelier_rule():
 
     await manager.on_candle_closed("XAUUSD")
 
-    assert order_service.modified == [(1, 2400.0, 2420.0)]
+    assert order_service.modified == [(1, 2400.21, 2420.0)]
 
 
 async def test_volatility_config_none_disables_all_volatility_rules():
@@ -781,3 +946,45 @@ async def test_volatility_config_none_disables_all_volatility_rules():
 
     assert order_service.closed == []
     assert order_service.modified == []
+
+
+async def test_order_rejected_from_sl_modify_is_caught_and_logged(caplog):
+    # Same breakeven fixture as test_moves_sl_to_breakeven_once_risk_is_covered,
+    # but the broker rejects the modify (retcode=10016 "invalid stops" — the
+    # proposed SL sits inside the symbol's stops_level distance from price).
+    # Regression guard for the chronic (150-270x/day) uncaught-OrderRejected
+    # bug: this must never propagate out of `on_candle_closed` — it must be
+    # caught, logged, and treated as "skip this position's management for
+    # this candle," not crash the candle's whole handler.
+    position = _position(open_price=2400.0, sl=2390.0)
+    order_service = RejectingOrderService([position], reject_tickets={1})
+    manager = PositionManager(order_service, FakeMarketData())
+
+    with caplog.at_level("WARNING"):
+        await manager.on_candle_closed("XAUUSD")  # must not raise
+
+    assert order_service.modified == []
+    assert any(
+        "position management skipped" in record.getMessage() and "ticket=1" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+async def test_order_rejected_on_one_position_does_not_block_managing_others():
+    # Two positions on the same symbol, both eligible for the same breakeven
+    # move: ticket 1's modify is rejected by the broker, ticket 2's succeeds.
+    # The rejection on ticket 1 must not stop ticket 2 (or, in the live
+    # engine, this candle's subsequent entry evaluation in
+    # `TradeEngine.on_candle_closed`) from being processed.
+    positions = [
+        _position(ticket=1, open_price=2400.0, sl=2390.0),
+        _position(ticket=2, open_price=2400.0, sl=2390.0),
+    ]
+    order_service = RejectingOrderService(positions, reject_tickets={1})
+    manager = PositionManager(order_service, FakeMarketData())
+
+    await manager.on_candle_closed("XAUUSD")  # must not raise
+
+    # 2400.21: entry + spread/stops_level buffer, see
+    # test_moves_sl_to_breakeven_once_risk_is_covered
+    assert order_service.modified == [(2, 2400.21, 2420.0)]

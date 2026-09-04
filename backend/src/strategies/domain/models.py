@@ -81,6 +81,12 @@ class Signal:
     pattern: str | None = None
     structure: tuple[StructurePoint, ...] = field(default_factory=tuple)
     indicators: tuple[IndicatorReading, ...] = field(default_factory=tuple)
+    # Bounded per-signal RISK-AMOUNT multiplier for high-conviction setups —
+    # not a lot-count multiplier and not a way to open more positions; the
+    # engine folds this into the existing per-position risk_multiplier before
+    # configs/risk.yaml's caps are applied, so it stays bounded. Default 1.0
+    # preserves today's behaviour for every strategy that doesn't set it.
+    size_multiplier: float = 1.0
 
 
 class ExitActionKind(StrEnum):
@@ -95,6 +101,14 @@ class ExitActionKind(StrEnum):
     # continuation confirmation, not a substitute for the generic +1R
     # breakeven rule `PositionManager` already runs for every position.
     BREAKEVEN = "breakeven"
+    # Moves this bot's own open position's SL to `ExitDecision.target_price`
+    # — same never-loosen guard as BREAKEVEN, but to an arbitrary price
+    # instead of only entry. For setups that want to lock in more than
+    # breakeven once a milestone clears (e.g. a sibling leg's TP), without
+    # closing the position outright. `target_price` is required for this
+    # action; the engine ignores the action (logs nothing, moves nothing)
+    # if it's `None`.
+    SET_SL = "set_sl"
 
 
 @dataclass(frozen=True)
@@ -106,6 +120,9 @@ class ExitDecision:
 
     action: ExitActionKind
     reason: str = ""
+    # Only read for `ExitActionKind.SET_SL` — the absolute price to move SL
+    # to, still subject to the engine's `_improves()` never-loosen guard.
+    target_price: float | None = None
 
 
 @dataclass(frozen=True)
@@ -182,4 +199,3 @@ class Strategy(Protocol):
         | list[Signal | ExitDecision]
         | None
     ): ...
-

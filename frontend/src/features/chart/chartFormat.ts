@@ -134,3 +134,40 @@ export function derivePeriodParam(candles: Candle[]): string | null {
   const newestStr = `${newestDate.getUTCFullYear()}-${pad(newestDate.getUTCMonth() + 1)}`;
   return `${oldestStr}:${newestStr}`;
 }
+
+export function getLocalTimeZoneOptions() {
+  return {
+    localization: {
+      timeFormatter: (time: number) => {
+        const date = new Date(time * 1000);
+        return date.toLocaleString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+      },
+    },
+    timeScale: {
+      tickMarkFormatter: (time: number, tickMarkType: number, locale: string) => {
+        const date = new Date(time * 1000);
+        switch (tickMarkType) {
+          case 0: // Year
+            return date.toLocaleString(locale, { year: 'numeric' });
+          case 1: // Month
+            return date.toLocaleString(locale, { month: 'short' });
+          case 2: // DayOfMonth
+            return date.toLocaleString(locale, { day: 'numeric' });
+          case 3: // Time
+            return date.toLocaleString(locale, { hour: '2-digit', minute: '2-digit' });
+          case 4: // TimeWithSeconds
+            return date.toLocaleString(locale, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          default:
+            return date.toLocaleString(locale, { hour: '2-digit', minute: '2-digit' });
+        }
+      }
+    }
+  };
+}

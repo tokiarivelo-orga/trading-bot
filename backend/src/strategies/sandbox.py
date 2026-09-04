@@ -62,6 +62,9 @@ ALLOWED_IMPORT_MODULES = frozenset(
         "src.strategies.generated.smc_dl_features",
         "src.strategies.generated.smc_dl_model_v2",
         "src.strategies.generated.smc_dl_features_v2",
+        # Entry-TF-agnostic broadened feature set (M1/M5 shared) — see that
+        # module's docstring for the HTF-rung genericization vs v2.
+        "src.strategies.generated.smc_dl_features_v3",
         # Labels are a training-time concern, but `expected_r` lives there so
         # the trainer, the strategy gate and the API all share one copy of
         # the expected-R arithmetic instead of three drifting ones.
@@ -69,6 +72,7 @@ ALLOWED_IMPORT_MODULES = frozenset(
         "src.strategies.domain.models",
         "src.strategies.domain.fatigue",
         "src.strategies.domain.online_learning",
+        "src.strategies.domain.structure_continuation",
         # Pure domain code (dataclasses/enum/numpy/pandas only, no I/O) reused
         # so generated features share one definition of session/trend/
         # volatility regime with the engine instead of each copying its own.

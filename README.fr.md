@@ -44,7 +44,10 @@ La passerelle nécessite un terminal MT5 en cours d'exécution sous Wine
 **Guide d'installation complet :** voir [`INSTALL.fr.md`](INSTALL.fr.md)
 pour le déroulé complet et autonome (prérequis, chaque invite de
 l'installateur, Docker, désinstallation, dépannage, FAQ). Le résumé
-ci-dessous en est la version courte.
+ci-dessous en est la version courte. **Configurer les secrets/variables
+d'environnement :** voir [`SECRETS.fr.md`](SECRETS.fr.md) pour chaque
+variable utilisée par ce projet, où obtenir une vraie valeur, et comment la
+régler sur chaque plateforme.
 
 Deux chemins d'installation, selon l'endroit où tourne la passerelle MT5 :
 

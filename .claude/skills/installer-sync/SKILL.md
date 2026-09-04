@@ -73,7 +73,11 @@ terminal-path/env-var resolution.
    content change usually needed there unless the manual steps themselves
    changed. `CLAUDE.md`'s "Installer & distribution" section states the
    binding rule this skill operationalizes — update it only if the rule
-   itself changes, not for every individual sync.
+   itself changes, not for every individual sync. If the change introduces
+   a new required env var/secret, `SECRETS.md`/`SECRETS.fr.md` also need a
+   new row/entry (purpose, required/default, how to obtain a value, which
+   platforms) — that's the canonical secrets reference and drifts out of
+   sync just like the installer templates do if it's skipped.
 
 ## Verify
 

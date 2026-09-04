@@ -41,6 +41,17 @@ Read `IMPLEMENTATION_PLAN.md` for the full design. These rules are binding.
   modify this file or route around its limits.
 - Engine circuit breakers (consecutive-loss pause, kill switch) are engine-level
   code; AI refinements must not touch `backend/src/engine/`.
+  **Scoped exception (authorized by user, 2026-09-03):** adding
+  `ExitActionKind.SET_SL` (a strategy-requested move of its own position's
+  SL to an explicit `target_price`, e.g. "lock in profit just past TP1")
+  to `PositionManager.apply_strategy_action` is permitted, on these
+  conditions, which any future change to that action must preserve: it
+  must route through the existing `_improves()` never-loosen guard (same
+  as `BREAKEVEN`, no new bypass), and it must not touch consecutive-loss
+  pause, kill-switch, or `configs/risk.yaml` enforcement anywhere in
+  `backend/src/engine/`. This exception covers only that one action kind
+  in `position_manager.py` — it does not reopen the rest of
+  `backend/src/engine/` to AI refinement.
 
 ## Quality bar
 - Every broker-affecting change requires unit tests plus a paper-mode

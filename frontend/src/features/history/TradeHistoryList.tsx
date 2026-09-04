@@ -20,8 +20,8 @@ function toApiFilters(f: TradeHistoryFilterState): Omit<ApiFilters, "limit" | "o
     strategy_version: f.strategyVersion || undefined,
     skill: f.skill || undefined,
     outcome: f.outcome || undefined,
-    open_from: f.openFrom ? Math.floor(Date.parse(`${f.openFrom}T00:00:00Z`) / 1000) : undefined,
-    open_to: f.openTo ? Math.floor(Date.parse(`${f.openTo}T23:59:59Z`) / 1000) : undefined,
+    open_from: f.openFrom ? Math.floor(Date.parse(`${f.openFrom}T00:00:00`) / 1000) : undefined,
+    open_to: f.openTo ? Math.floor(Date.parse(`${f.openTo}T23:59:59`) / 1000) : undefined,
     order_by: f.orderBy,
     order_dir: f.orderDir,
   };

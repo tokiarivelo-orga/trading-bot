@@ -7,6 +7,7 @@
 import { AreaSeries, createChart, type IChartApi, type UTCTimestamp } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 import type { EquityPoint } from "@/shared/api/client";
+import { getLocalTimeZoneOptions } from "../chart/chartFormat";
 
 function cssVar(name: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -22,10 +23,12 @@ export function EquityChart({ points }: { points: EquityPoint[] }) {
 
     const line = cssVar("--color-line");
     const accent = cssVar("--color-accent");
+    const timeZoneOpts = getLocalTimeZoneOptions();
     const chart = createChart(container, {
       layout: { background: { color: cssVar("--color-panel") }, textColor: cssVar("--color-ink") },
       grid: { vertLines: { color: line }, horzLines: { color: line } },
-      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line },
+      timeScale: { timeVisible: true, secondsVisible: false, borderColor: line , tickMarkFormatter: timeZoneOpts.timeScale.tickMarkFormatter },
+      localization: timeZoneOpts.localization,
       rightPriceScale: { borderColor: line },
     });
     const series = chart.addSeries(AreaSeries, {

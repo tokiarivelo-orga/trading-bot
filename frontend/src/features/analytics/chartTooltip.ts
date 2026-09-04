@@ -20,7 +20,7 @@ export interface TooltipState {
 }
 
 export function formatCrosshairTime(unixSeconds: number): string {
-  return new Date(unixSeconds * 1000).toISOString().replace("T", " ").slice(0, 16);
+  return new Date(unixSeconds * 1000).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 export function attachSeriesTooltip(

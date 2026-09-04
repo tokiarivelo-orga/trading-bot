@@ -366,11 +366,13 @@ class TrainedModelOut(BaseModel):
             data_end=model.data_end,
             feature_count=model.feature_count,
             weights_bytes=model.weights_bytes,
-            summary=TrainingSummaryOut(**{
-                key: value
-                for key, value in (model.summary or {}).items()
-                if key in TrainingSummaryOut.model_fields
-            }),
+            summary=TrainingSummaryOut(
+                **{
+                    key: value
+                    for key, value in (model.summary or {}).items()
+                    if key in TrainingSummaryOut.model_fields
+                }
+            ),
         )
 
 
