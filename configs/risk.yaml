@@ -4,7 +4,13 @@
 risk_per_trade_pct: 0.5
 daily_loss_limit_pct: 100.0
 max_open_positions: 100
-max_trades_per_day: 10000
+# Numeric daily trade-count cap. null = no cap (unlimited entries/day).
+max_trades_per_day: null
+# Separate manual kill switch, not a count: true blocks every new trade for
+# the rest of the trading day regardless of max_trades_per_day above; false
+# (the default if this key is omitted) leaves entries unlimited. Also
+# editable live from Settings -> Risk.
+max_trades_per_day_enabled: false
 consecutive_loss_pause: 10000 # circuit breaker: pause engine + notify after N straight losses
 consecutive_loss_pause_enabled: true # false = engine keeps running through any losing streak
 # On a small balance, risk_per_trade_pct alone can compute a lot size below
