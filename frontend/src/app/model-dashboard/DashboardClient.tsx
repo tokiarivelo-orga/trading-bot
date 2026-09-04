@@ -21,11 +21,13 @@ function pseudoRandom(seed: string) {
 
 // Neural Network Visualizer Component
 function NeuralVisualizer({ signal, onClose }: { signal: any, onClose: () => void }) {
+  // Generate deterministic "activations" for hidden layers based on the signal's timestamp.
+  // Must run before the early return below — React Hooks can't be called
+  // conditionally, so the null-seed fallback keeps this unconditional.
+  const rand = useMemo(() => pseudoRandom(signal?.time ?? ""), [signal?.time]);
+
   if (!signal) return null;
 
-  // Generate deterministic "activations" for hidden layers based on the signal's timestamp
-  const rand = useMemo(() => pseudoRandom(signal.time), [signal.time]);
-  
   const inputNodes = Array.from({ length: 8 }).map(() => rand() > 0.5 ? 0.3 + rand() * 0.7 : 0.1);
   const hidden1Nodes = Array.from({ length: 6 }).map(() => rand() > 0.3 ? 0.4 + rand() * 0.6 : 0.1);
   const hidden2Nodes = Array.from({ length: 5 }).map(() => rand() > 0.2 ? 0.5 + rand() * 0.5 : 0.1);
