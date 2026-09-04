@@ -523,6 +523,40 @@ async def test_time_stop_closes_position_without_progress():
     assert order_service.closed == [1]
 
 
+class _SymbolScopedOrderService(FakeOrderService):
+    """`get_positions` actually filters by `symbol`, matching the real
+    adapter — the base `FakeOrderService` ignores the argument and always
+    returns every position, which would mask the bug the test below exists
+    to catch (it only manifests when a symbol's `open_tickets` genuinely
+    excludes another symbol's tickets)."""
+
+    async def get_positions(self, symbol: str | None = None) -> list[Position]:
+        return [p for p in self._positions if symbol is None or p.symbol == symbol]
+
+
+async def test_vanished_detection_is_scoped_per_symbol():
+    # Regression: `_candles_since_open`/`_trade_extreme_favorable` are keyed
+    # by ticket alone (globally unique across symbols) but used to be diffed
+    # against a single symbol's `open_tickets` on every `on_candle_closed`
+    # call. An XAUUSD position was therefore flagged "vanished" — and its
+    # give-back high-water mark and time-stop counter wiped — on every OTHER
+    # symbol's candle close, just because that symbol's open-position list
+    # naturally doesn't contain the XAUUSD ticket.
+    position = _position(ticket=1, symbol="XAUUSD", side=Side.SELL, open_price=2400.0, sl=2420.0)
+    order_service = _SymbolScopedOrderService([position])
+    reconciliation = FakeReconciliation()
+    manager = PositionManager(
+        order_service, FakeMarketData(), reconciliation=reconciliation, time_stop_candles=2
+    )
+
+    await manager.on_candle_closed("XAUUSD")  # candles_open -> 1
+    await manager.on_candle_closed("XAGUSD")  # a different symbol's candle closes
+    await manager.on_candle_closed("XAUUSD")  # candles_open should now be 2 -> time-stop fires
+
+    assert reconciliation.vanished_calls == []
+    assert order_service.closed == [1]
+
+
 async def test_get_symbol_info_fetched_once_per_symbol_with_multiple_positions():
     # Two open positions on the same symbol must share a single
     # get_symbol_info call per on_candle_closed cycle, same hoisting pattern

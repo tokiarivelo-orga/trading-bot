@@ -170,6 +170,14 @@ class PositionManager:
         # HIGH-regime chandelier rule first fired, which would have made the
         # give-back peak silently wrong.
         self._trade_extreme_favorable: dict[int, float] = {}
+        # ticket -> the symbol it was last tracked under. `_candles_since_open`
+        # and `_trade_extreme_favorable` are keyed by ticket alone (globally
+        # unique) but populated per-symbol in `on_candle_closed`'s positions
+        # loop below; this lets that same method's vanished-ticket diff scope
+        # itself to tickets that actually belong to the symbol whose candle
+        # just closed, instead of every symbol's tickets at once — see the
+        # comment at that diff for why the un-scoped version was a real bug.
+        self._ticket_symbol: dict[int, str] = {}
         # symbol -> {ticket: order}, as of the last candle close — kept so a
         # vanished ticket's side/volume is still known when reconciling.
         self._pending_seen: dict[str, dict[int, PendingOrder]] = {}
@@ -221,6 +229,7 @@ class PositionManager:
             )
             self._candles_since_open.pop(position.ticket, None)
             self._trade_extreme_favorable.pop(position.ticket, None)
+            self._ticket_symbol.pop(position.ticket, None)
             return
         if action.action is ExitActionKind.BREAKEVEN:
             candidate = position.open_price
@@ -261,10 +270,27 @@ class PositionManager:
     async def on_candle_closed(self, symbol: str) -> None:
         positions = await self._order_service.get_positions(symbol)
         open_tickets = {p.ticket for p in positions}
-        vanished = [t for t in self._candles_since_open if t not in open_tickets]
+        # Scoped to tickets tracked under *this* symbol: `_candles_since_open`
+        # is a single dict shared across every symbol this account trades
+        # (ticket numbers are globally unique, so keying by ticket alone is
+        # fine everywhere else in this class), but `open_tickets` above only
+        # ever holds this one symbol's open positions. Diffing the full dict
+        # against it — as this used to do — flagged every other symbol's
+        # still-open tickets as "vanished" on every candle close that wasn't
+        # their own, firing bogus reconciliation under the wrong symbol and
+        # wiping their `_trade_extreme_favorable` high-water mark (silently
+        # weakening the give-back rule) and `_candles_since_open` time-stop
+        # counter, every single time. Filtering to `_ticket_symbol[t] ==
+        # symbol` first is the fix.
+        vanished = [
+            t
+            for t in self._candles_since_open
+            if self._ticket_symbol.get(t) == symbol and t not in open_tickets
+        ]
         for ticket in vanished:
             del self._candles_since_open[ticket]
             self._trade_extreme_favorable.pop(ticket, None)
+            self._ticket_symbol.pop(ticket, None)
         # A ticket we were tracking that's no longer in the broker's open
         # list closed server-side (SL/TP fill) — nothing else in the system
         # would ever find out otherwise (§12 Phase 9).
@@ -282,6 +308,7 @@ class PositionManager:
                 self._candles_since_open[position.ticket] = (
                     self._candles_since_open.get(position.ticket, 0) + 1
                 )
+                self._ticket_symbol[position.ticket] = symbol
                 try:
                     await self._manage(position, bases, info, regime, atr_value, pivots)
                 except OrderRejected as exc:
@@ -572,6 +599,7 @@ class PositionManager:
             )
             self._candles_since_open.pop(position.ticket, None)
             self._trade_extreme_favorable.pop(position.ticket, None)
+            self._ticket_symbol.pop(position.ticket, None)
             return
 
         target_sl: float | None = None
@@ -733,6 +761,7 @@ class PositionManager:
                 )
                 self._candles_since_open.pop(position.ticket, None)
                 self._trade_extreme_favorable.pop(position.ticket, None)
+                self._ticket_symbol.pop(position.ticket, None)
                 return
             if decision.action is ExitAction.TIGHTEN_SL and decision.stop_price is not None:
                 floor = target_sl if target_sl is not None else position.sl
@@ -780,3 +809,4 @@ class PositionManager:
                 candles_open,
             )
             del self._candles_since_open[position.ticket]
+            self._ticket_symbol.pop(position.ticket, None)

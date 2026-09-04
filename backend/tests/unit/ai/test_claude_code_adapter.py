@@ -20,8 +20,10 @@ class _FakeProcess:
         self._stdout = stdout
         self._stderr = stderr
         self.returncode = returncode
+        self.stdin_input: bytes | None = None
 
-    async def communicate(self) -> tuple[bytes, bytes]:
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:  # noqa: A002
+        self.stdin_input = input
         return self._stdout, self._stderr
 
 
@@ -34,7 +36,7 @@ class _HangingProcess:
         self.waited = False
         self.returncode: int | None = None
 
-    async def communicate(self) -> tuple[bytes, bytes]:
+    async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:  # noqa: A002
         await asyncio.sleep(3600)
         raise AssertionError("should have been cancelled by the timeout")
 
@@ -91,15 +93,37 @@ async def test_complete_disables_tools_and_mcp_and_session_persistence(monkeypat
 async def test_complete_folds_system_into_prompt_text(monkeypatch):
     payload = {"type": "result", "is_error": False, "result": "ok"}
     captured: list = []
-    _patch_subprocess(monkeypatch, _FakeProcess(json.dumps(payload).encode()), captured)
+    process = _FakeProcess(json.dumps(payload).encode())
+    _patch_subprocess(monkeypatch, process, captured)
 
     adapter = ClaudeCodeAdapter("claude", "sonnet")
     await adapter.complete(LLMMessage(system="SYS_TEXT", user="USER_TEXT"))
 
-    (args,) = captured
-    prompt = args[args.index("-p") + 1]
+    assert process.stdin_input is not None
+    prompt = process.stdin_input.decode()
     assert "SYS_TEXT" in prompt
     assert "USER_TEXT" in prompt
+
+
+async def test_complete_sends_prompt_via_stdin_not_argv(monkeypatch):
+    # A review prompt embedding a full strategy file plus 10 trades' JSON
+    # snapshots is easily large enough to exceed the OS argv size limit
+    # (`OSError: [Errno 7] Argument list too long`) if passed positionally —
+    # it must go over stdin instead, uncapped by ARG_MAX.
+    payload = {"type": "result", "is_error": False, "result": "ok"}
+    captured: list = []
+    process = _FakeProcess(json.dumps(payload).encode())
+    _patch_subprocess(monkeypatch, process, captured)
+
+    huge = "x" * 5_000_000
+    adapter = ClaudeCodeAdapter("claude", "sonnet")
+    await adapter.complete(LLMMessage(system=huge, user="u"))
+
+    (args,) = captured
+    assert not any(huge in str(a) for a in args)
+    assert process.stdin_input is not None
+    assert huge in process.stdin_input.decode()
+    assert args[args.index("-p") + 1] == "--model"
 
 
 async def test_nonzero_exit_raises(monkeypatch):

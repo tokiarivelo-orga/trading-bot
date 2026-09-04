@@ -49,10 +49,16 @@ class ClaudeCodeAdapter:
         # for concise output, same as they already do for the other adapters.
         del max_tokens
         prompt = f"{message.system}\n\n{message.user}"
+        # Fed via stdin, not as a positional argv element: a review prompt
+        # embedding a full strategy file plus 10 trades' JSON snapshots
+        # routinely exceeds the OS argv size limit, which
+        # `asyncio.create_subprocess_exec` surfaces as `OSError: [Errno 7]
+        # Argument list too long` — confirmed live via `claude -p` reading
+        # a piped prompt with no positional prompt argument, per `-p`'s own
+        # "useful for pipes" description in `claude --help`.
         proc = await asyncio.create_subprocess_exec(
             self._binary,
             "-p",
-            prompt,
             "--model",
             self._model,
             "--output-format",
@@ -62,11 +68,14 @@ class ClaudeCodeAdapter:
             "--strict-mcp-config",
             "--no-session-persistence",
             *self._extra_args,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self._timeout_s)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode()), timeout=self._timeout_s
+            )
         except TimeoutError:
             # asyncio.wait_for only cancels the *wait* — the subprocess keeps
             # running unless we kill it ourselves, otherwise every timeout
