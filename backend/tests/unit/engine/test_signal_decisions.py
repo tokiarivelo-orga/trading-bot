@@ -8,7 +8,6 @@ from src.activity.domain.models import DecisionCheck
 from src.broker.domain.trading import OrderRejected
 from src.engine.application.risk_manager import RiskManager
 from src.engine.domain.models import RiskCaps
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.domain.models import Timeframe
 from src.shared.events.definitions import CandleClosed
 from src.strategies.domain.models import Direction, Signal
@@ -191,34 +190,21 @@ async def test_no_account_connected_is_recorded_as_skipped():
     assert sink.final_outcome == "skipped"
 
 
-async def test_volatility_guard_block_outcome():
-    # Engine-level EXTREME-regime volatility guard is intentionally bypassed
-    # (see trade_loop.py's "BYPASSED PER USER REQUEST" logging) — the
-    # EXTREME regime is still detected (percentile still reflects it below)
-    # but no longer blocks the entry or stamps a final "volatility_guard"
-    # outcome; the signal proceeds to "opened". The recorded check itself
-    # is also always passed=True now, unconditionally — see
-    # `_volatility_check(percentile, self._volatility_config, passed=True)`
-    # in trade_loop.py — so it no longer reflects the true pass/fail result
-    # either, the same side effect the HTF-veto test above documents.
+async def test_an_extreme_volatility_spike_neither_blocks_nor_records_a_guard_check():
+    # The volatility guard was removed: an EXTREME-ATR candle series still
+    # opens the trade, and no "volatility_percentile" gate is recorded.
     candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 40)
-    config = VolatilityConfig(atr_period=5, regime_lookback_bars=30)
     sink, order_service = await _run(
         market_data=FakeMarketData(candles=candles),
-        volatility_config=config,
         context_bars=40,
         strategy=FakeStrategy(BUY_SIGNAL, htf_veto=False),
         strategy_source=FakeStrategySource({"fake": FakeStrategy(BUY_SIGNAL, htf_veto=False)}),
     )
 
     assert len(order_service.opened) == 1
-    # Same "engine never stamps opened, bypass no longer stamps a
-    # rejection either" reasoning as test_htf_veto_outcome above —
-    # `final_outcome` falls back to "skipped" despite the trade opening.
-    assert sink.final_outcome == "skipped"
-    guard = sink.check("volatility_percentile")
-    assert guard.passed is True
-    assert guard.value >= guard.threshold  # percentile itself still reflects EXTREME
+    assert "volatility_percentile" not in {c.name for c in sink.checks}
+    # ...but the analytics tag still says what regime the signal fired in.
+    assert sink.recorded[0]["regime_volatility"] == "extreme"
 
 
 async def test_broker_rejection_leaves_the_outcome_to_the_order_service():
@@ -243,8 +229,8 @@ async def test_no_sink_wired_still_trades():
 
 async def test_a_filled_signal_records_every_gate_it_cleared():
     """The funnel needs passing gates, not only the failing one: a signal that
-    made it to the broker must carry its HTF, volatility, position-cap and
-    sizing checks, all passed."""
+    made it to the broker must carry its HTF, position-cap and sizing checks,
+    all passed."""
     sink, order_service = await _run()
 
     assert len(order_service.opened) == 1
@@ -252,7 +238,6 @@ async def test_a_filled_signal_records_every_gate_it_cleared():
     assert set(passed) >= {
         "open_positions",
         "htf_confirm",
-        "volatility_percentile",
         "position_volume",
     }
     assert all(c.passed for c in passed.values())

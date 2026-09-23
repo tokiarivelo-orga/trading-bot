@@ -244,9 +244,7 @@ def test_symbol_analytics_empty_input_returns_empty_list():
 
 def test_bot_analytics_excludes_trades_with_no_skill():
     trades = [
-        make_record(
-            "1", skill="normal/xauusd/a", close_time=utc(2026, 7, 10, 15, 0), profit=5.0
-        ),
+        make_record("1", skill="normal/xauusd/a", close_time=utc(2026, 7, 10, 15, 0), profit=5.0),
         make_record("2", skill=None, close_time=utc(2026, 7, 10, 15, 0), profit=100.0),
     ]
 
@@ -315,12 +313,8 @@ def test_bot_analytics_bot_name_and_symbol_derived_from_skill_and_latest_trade()
 
 def test_bot_analytics_sorted_by_total_profit_descending():
     trades = [
-        make_record(
-            "1", skill="normal/a/x", close_time=utc(2026, 7, 10, 15, 0), profit=1.0
-        ),
-        make_record(
-            "2", skill="normal/b/y", close_time=utc(2026, 7, 10, 15, 0), profit=99.0
-        ),
+        make_record("1", skill="normal/a/x", close_time=utc(2026, 7, 10, 15, 0), profit=1.0),
+        make_record("2", skill="normal/b/y", close_time=utc(2026, 7, 10, 15, 0), profit=99.0),
     ]
 
     results = compute_bot_analytics(trades)
@@ -330,12 +324,8 @@ def test_bot_analytics_sorted_by_total_profit_descending():
 
 def test_bot_analytics_max_drawdown_zero_when_curve_never_dips():
     trades = [
-        make_record(
-            "1", skill="normal/a/x", close_time=utc(2026, 7, 10, 15, 0), profit=1.0
-        ),
-        make_record(
-            "2", skill="normal/a/x", close_time=utc(2026, 7, 10, 16, 0), profit=2.0
-        ),
+        make_record("1", skill="normal/a/x", close_time=utc(2026, 7, 10, 15, 0), profit=1.0),
+        make_record("2", skill="normal/a/x", close_time=utc(2026, 7, 10, 16, 0), profit=2.0),
     ]
 
     bot = compute_bot_analytics(trades)[0]
@@ -453,9 +443,7 @@ def test_cost_pct_of_gross_edge_none_when_gross_edge_not_positive():
     """A bot that lost more than its cost drag (gross_edge <= 0) reports
     `cost_pct_of_gross_edge=None` — undefined, like `profit_factor` with no
     losses, rather than a negative or divide-by-zero artifact."""
-    bots = compute_bot_analytics(
-        [telemetry_record("1", profit=-10.0, transaction_cost=2.0)]
-    )
+    bots = compute_bot_analytics([telemetry_record("1", profit=-10.0, transaction_cost=2.0)])
 
     # gross_edge = total_profit (-10) + total_transaction_cost (2) = -8 <= 0
     assert bots[0].total_transaction_cost == 2.0
@@ -476,12 +464,27 @@ def regime_record(id: str, **kw) -> TradeRecord:
 
 def test_regime_analytics_groups_by_bot_and_bucket_per_dimension():
     trades = [
-        regime_record("1", profit=10.0, regime_volatility="high", regime_trend="trending",
-                       regime_session="london"),
-        regime_record("2", profit=-4.0, regime_volatility="high", regime_trend="ranging",
-                       regime_session="london"),
-        regime_record("3", profit=6.0, regime_volatility="low", regime_trend="trending",
-                       regime_session="asian"),
+        regime_record(
+            "1",
+            profit=10.0,
+            regime_volatility="high",
+            regime_trend="trending",
+            regime_session="london",
+        ),
+        regime_record(
+            "2",
+            profit=-4.0,
+            regime_volatility="high",
+            regime_trend="ranging",
+            regime_session="london",
+        ),
+        regime_record(
+            "3",
+            profit=6.0,
+            regime_volatility="low",
+            regime_trend="trending",
+            regime_session="asian",
+        ),
     ]
 
     results = compute_regime_analytics(trades)

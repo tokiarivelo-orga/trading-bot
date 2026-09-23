@@ -6,10 +6,10 @@ per-bot stage counts plus the drop reasons at each stage. No I/O, no
 framework, so the aggregation is trivially unit-testable.
 
 Stage order here is the order `TradeEngine._enter_for_bot` actually evaluates
-its gates: HTF confirmation first, then the volatility guard / open-position
-cap / lot sizing, and only then the broker's spread + RR gate. (The plan's
-prose lists "spread" before "sized OK"; the engine sizes first, and the
-funnel must reflect the real order or the counts would not be monotonic.)
+its gates: HTF confirmation first, then the open-position cap / lot sizing,
+and only then the broker's spread + RR gate. (The plan's prose lists
+"spread" before "sized OK"; the engine sizes first, and the funnel must
+reflect the real order or the counts would not be monotonic.)
 """
 
 from __future__ import annotations
@@ -43,7 +43,8 @@ _OUTCOME_STAGE: dict[str, int] = {
     "daily_loss_breaker": 0,
     "risk_rejected": 0,
     "htf_veto": 0,
-    # Passed HTF, died before/at sizing.
+    # Passed HTF, died before/at sizing. `volatility_guard` is legacy (the
+    # guard was removed) — kept so historical rows land in the right stage.
     "volatility_guard": 1,
     "max_positions": 1,
     "risk_sizing": 1,

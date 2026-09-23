@@ -35,7 +35,6 @@ from src.broker.domain.broker_constraints import (
     REASON_VOLUME_BELOW_MIN,
     RETCODE_INVALID_STOPS,
 )
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.adapters.candle_repository import CandleRepository
 from src.market_data.adapters.replay import SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
@@ -116,18 +115,6 @@ def seed_database(tmp_path, spec: SymbolSpec) -> str:
     repository.upsert_many(build_htf_candles(Timeframe.H4, timedelta(hours=4)))
     SymbolSpecRepository(session_factory).upsert("XAUUSD", spec)
     return url
-
-
-@pytest.fixture(autouse=True)
-def _neutralize_volatility_guard(monkeypatch):
-    """The fixture's "quiet range then breakout" shape is exactly what the
-    volatility guard flags; an ATR period longer than the fixture neutralizes
-    it via the guard's own insufficient-history fallback, same as the Phase 5
-    flow test."""
-    monkeypatch.setattr(
-        "src.backtest.application.run_backtest.load_volatility_config",
-        lambda configs_dir: VolatilityConfig(atr_period=999),
-    )
 
 
 @pytest.fixture
@@ -221,9 +208,7 @@ class TestNormalSymbolStillTrades:
             assert steps == pytest.approx(round(steps))
             assert trade.volume >= XAUUSD_SPEC.volume_min
 
-    async def test_a_sub_minimum_lot_is_refused_rather_than_silently_traded(
-        self, tmp_path
-    ) -> None:
+    async def test_a_sub_minimum_lot_is_refused_rather_than_silently_traded(self, tmp_path) -> None:
         """A 1.0-lot step: the risk manager's 0.04-lot sizing is perfectly
         valid on its own terms, rounds down to 0.0 on the broker's grid, and
         must then be **refused** — never quietly bumped up to `volume_min`,
@@ -250,9 +235,7 @@ class TestNormalSymbolStillTrades:
         assert buy_honest.profit < buy_free.profit
         assert sell_honest.profit < sell_free.profit
 
-    async def test_the_slippage_model_documents_its_own_calibration(
-        self, database_url
-    ) -> None:
+    async def test_the_slippage_model_documents_its_own_calibration(self, database_url) -> None:
         report = await run(database_url)
         # No live fills supplied, so the documented fallback applies and says so.
         assert report.broker_realism.slippage_source == "fallback"
@@ -281,9 +264,7 @@ class TestOutcomeVocabulary:
         assert not any(s.outcome == "risk_rejected" for s in report.signals)
         assert sum(1 for s in report.signals if s.outcome == "opened") == len(report.trades)
 
-    async def test_signals_carry_the_reference_price_the_engine_saw(
-        self, database_url
-    ) -> None:
+    async def test_signals_carry_the_reference_price_the_engine_saw(self, database_url) -> None:
         report = await run(database_url)
         assert all(s.price is not None for s in report.signals)
 

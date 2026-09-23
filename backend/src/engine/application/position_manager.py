@@ -50,15 +50,6 @@ A fourth rule (`exit_policy_config`) attacks give-back specifically:
 `exit_policy_config=None` disables it and reproduces pre-existing behavior
 exactly.
 
-When `volatility_config` is supplied, a fourth, bot-agnostic set of rules
-reacts to the symbol's current volatility regime (`engine/domain/volatility.py`):
-an EXTREME regime while losing closes the position outright (bypassing the
-SL-tightening rules above — this is an exit, not a tighter stop); an EXTREME
-regime while winning locks in a fraction of unrealized profit; a HIGH regime
-with enough running profit trails SL behind the best price reached so far by
-a multiple of ATR ("chandelier" exit). `volatility_config=None` disables all
-of this and reproduces pre-Phase-B behavior exactly.
-
 A fifth rule (`structure_pivot_config`) is a progressive, price-action-based
 profit lock distinct from the fixed +1R breakeven and the zone-based
 trailing above:
@@ -78,7 +69,6 @@ behavior exactly.
 from __future__ import annotations
 
 import logging
-import math
 from collections.abc import Mapping
 from datetime import UTC, datetime
 
@@ -108,11 +98,6 @@ from src.engine.domain.structure_pivot import (
     decide_structure_pivot_exit,
     detect_swing_pivots,
 )
-from src.engine.domain.volatility import (
-    VolatilityConfig,
-    VolatilityRegime,
-    latest_volatility_regime,
-)
 from src.engine.domain.zone_detection import DEFAULT_ATR_PERIOD, Base, BaseKind, atr, detect_bases
 from src.market_data.domain.models import MarketDataUnavailable, SymbolInfo, Timeframe
 from src.market_data.ports.market_data import MarketDataPort
@@ -137,7 +122,6 @@ class PositionManager:
         secure_timeframe: Timeframe = DEFAULT_SECURE_TIMEFRAME,
         secure_lookback_bars: int = DEFAULT_SECURE_LOOKBACK_BARS,
         secure_buffer_r_mult: float = DEFAULT_SECURE_BUFFER_R_MULT,
-        volatility_config: VolatilityConfig | None = None,
         exit_policy_config: ExitPolicyConfig | None = None,
         exit_policy_settings: ExitPolicySettings | None = None,
         structure_pivot_config: StructurePivotConfig | None = None,
@@ -151,7 +135,6 @@ class PositionManager:
         self._secure_timeframe = secure_timeframe
         self._secure_lookback_bars = secure_lookback_bars
         self._secure_buffer_r_mult = secure_buffer_r_mult
-        self._volatility_config = volatility_config
         self._exit_policy_config = exit_policy_config
         self._structure_pivot_config = structure_pivot_config
         # Per-bot resolution. `magic` is the only bot identity an open
@@ -161,14 +144,11 @@ class PositionManager:
         # `exit_policy_config` — i.e. the previous global behaviour.
         self._exit_policy_settings = exit_policy_settings
         self._magic_to_strategy = dict(magic_to_strategy or {})
-        self._volatility_guard_enabled = True
         self._candles_since_open: dict[int, int] = {}
         # ticket -> best favorable mark seen since entry (max for BUY, min
         # for SELL). Updated unconditionally on every candle close (see
         # `_manage`), because the give-back rule needs a true high-water mark
-        # from entry onward — it used to be populated only once the
-        # HIGH-regime chandelier rule first fired, which would have made the
-        # give-back peak silently wrong.
+        # from entry onward.
         self._trade_extreme_favorable: dict[int, float] = {}
         # ticket -> the symbol it was last tracked under. `_candles_since_open`
         # and `_trade_extreme_favorable` are keyed by ticket alone (globally
@@ -181,20 +161,6 @@ class PositionManager:
         # symbol -> {ticket: order}, as of the last candle close — kept so a
         # vanished ticket's side/volume is still known when reconciling.
         self._pending_seen: dict[str, dict[int, PendingOrder]] = {}
-
-    def set_volatility_guard_enabled(self, enabled: bool) -> None:
-        """Live-updates whether the volatility-regime position-management
-        rules (`_manage`'s Rules 0/4/5 — EXTREME forced close/profit-lock,
-        HIGH chandelier trailing) are active — takes effect on the very
-        next `on_candle_closed`. When `False`, `_detect_bases` no longer
-        classifies a regime at all, so `_manage` sees `regime=None` and
-        skips those rules exactly as it does when `volatility_config=None`.
-        Not persisted: a backend restart reverts to
-        `configs/volatility.yaml` (enabled by default). Set together with
-        `TradeEngine.set_volatility_guard_enabled` by the same API call —
-        see `engine/api/routes.py`."""
-        self._volatility_guard_enabled = enabled
-        logger.info("position manager: volatility guard enabled=%s", enabled)
 
     async def apply_strategy_action(self, position: Position, action: ExitDecision) -> None:
         """Executes a strategy's own `ExitDecision` on its own open
@@ -298,7 +264,7 @@ class PositionManager:
             await self._reconciliation.reconcile_vanished(symbol, set(vanished))
 
         if positions:
-            bases, regime, atr_value, pivots = await self._detect_bases(symbol)
+            bases, pivots = await self._detect_bases(symbol)
             # One symbol-info fetch per symbol per candle close, shared by every
             # open position on that symbol — same cost concern/pattern as the
             # `_detect_bases` hoist above: two+ positions on the same symbol
@@ -310,7 +276,7 @@ class PositionManager:
                 )
                 self._ticket_symbol[position.ticket] = symbol
                 try:
-                    await self._manage(position, bases, info, regime, atr_value, pivots)
+                    await self._manage(position, bases, info, pivots)
                 except OrderRejected as exc:
                     # A broker-side reject from any SL/TP modify or close
                     # `_manage` attempts (most commonly retcode=10016 "invalid
@@ -340,28 +306,23 @@ class PositionManager:
 
     async def _detect_bases(
         self, symbol: str
-    ) -> tuple[list[Base], VolatilityRegime | None, float | None, list[SwingPivot]]:
+    ) -> tuple[list[Base], list[SwingPivot]]:
         """One zone scan per symbol per candle close, shared by every open
         position on that symbol — cheaper than re-fetching/re-detecting per
         position, and `on_candle_closed` is already scoped to one symbol.
-        Also classifies the current volatility regime off these same
-        `secure_timeframe` candles when `self._volatility_config` is set, so
-        the volatility guard in `_manage` never needs a second market-data
-        round trip. Also detects fresh swing pivots (HH/HL/LH/LL) off this
+        Also detects fresh swing pivots (HH/HL/LH/LL) off this
         same candle window when `self._structure_pivot_config` is set — the
         structure-pivot rule reuses this fetch rather than opening a second
         candle-access path (`engine/domain/structure_pivot.py`). Returns
-        `(bases, regime, atr_value, pivots)`; `regime`/`atr_value` are
-        `(None, None)` whenever no `volatility_config` was supplied, and
-        `pivots` is `[]` whenever no `structure_pivot_config` was supplied."""
+        `(bases, pivots)`; `pivots` is `[]` whenever no `structure_pivot_config` was supplied."""
         try:
             candles = await self._market_data.get_candles(
                 symbol, self._secure_timeframe, self._secure_lookback_bars
             )
         except MarketDataUnavailable:
-            return [], None, None, []
+            return [], []
         if len(candles) < DEFAULT_ATR_PERIOD * 2 + 10:
-            return [], None, None, []
+            return [], []
         opens_arr = np.array([c.open for c in candles])
         highs_arr = np.array([c.high for c in candles])
         lows_arr = np.array([c.low for c in candles])
@@ -369,27 +330,13 @@ class PositionManager:
         atr_values = atr(highs_arr, lows_arr, closes_arr, DEFAULT_ATR_PERIOD)
         bases = detect_bases(opens_arr, highs_arr, lows_arr, closes_arr, atr_values)
 
-        regime: VolatilityRegime | None = None
-        atr_value: float | None = None
-        if self._volatility_config is not None and self._volatility_guard_enabled:
-            regime, _percentile, atr_value = latest_volatility_regime(
-                highs_arr,
-                lows_arr,
-                closes_arr,
-                atr_period=self._volatility_config.atr_period,
-                regime_lookback_bars=self._volatility_config.regime_lookback_bars,
-                low_percentile=self._volatility_config.low_percentile,
-                high_percentile=self._volatility_config.high_percentile,
-                extreme_percentile=self._volatility_config.extreme_percentile,
-            )
-
         pivots: list[SwingPivot] = []
         if self._structure_pivot_config is not None and self._structure_pivot_config.enabled:
             times = [c.time for c in candles]
             pivots = detect_swing_pivots(
                 highs_arr, lows_arr, times, pivot_bars=self._structure_pivot_config.pivot_bars
             )
-        return bases, regime, atr_value, pivots
+        return bases, pivots
 
     async def _manage_pending_orders(self, symbol: str) -> None:
         pending = await self._order_service.get_pending_orders(symbol)
@@ -549,8 +496,6 @@ class PositionManager:
         position: Position,
         bases: list[Base],
         info: SymbolInfo,
-        regime: VolatilityRegime | None = None,
-        atr_value: float | None = None,
         pivots: list[SwingPivot] | None = None,
     ) -> None:
         if position.sl is None:
@@ -562,7 +507,7 @@ class PositionManager:
 
         # High-water mark, tracked for every position on every candle close
         # regardless of which rules are enabled — the give-back rule below
-        # and the chandelier rule both read it, and a peak that only starts
+        # reads it, and a peak that only starts
         # being recorded when some other rule first fires is not a peak.
         favorable = self._trade_extreme_favorable.get(position.ticket)
         if favorable is None:
@@ -573,48 +518,25 @@ class PositionManager:
             favorable = min(favorable, mark)
         self._trade_extreme_favorable[position.ticket] = favorable
 
-        volatility_active = (
-            self._volatility_config is not None
-            and atr_value is not None
-            and not math.isnan(atr_value)
-        )
-
-        # Rule 0 (volatility guard): EXTREME regime while losing closes the
-        # position outright instead of tightening SL — bypasses every
-        # SL-tightening rule below entirely.
-        if (
-            volatility_active
-            and regime is VolatilityRegime.EXTREME
-            and progress <= 0
-            and self._volatility_config is not None
-            and self._volatility_config.extreme_close_if_losing
-        ):
-            await self._order_service.close_position(
-                position.ticket, reason="volatility guard: EXTREME regime while losing"
-            )
-            logger.info(
-                "volatility guard: ticket=%d %s closed — EXTREME regime while losing",
-                position.ticket,
-                position.symbol,
-            )
-            self._candles_since_open.pop(position.ticket, None)
-            self._trade_extreme_favorable.pop(position.ticket, None)
-            self._ticket_symbol.pop(position.ticket, None)
-            return
-
         target_sl: float | None = None
         target_sl_reason: str | None = None
 
-        # Rule 1: breakeven at +1R. The candidate must clear the spread (and
+        # Rule 1: breakeven at positive profit. The candidate must clear the spread (and
         # the broker's stops_level minimum) — see `_spread_clearing_buffer` —
         # not sit at the bare entry price, which still realizes a small loss
         # equal to the spread once the SL fills on the opposite side of the
-        # book from entry.
-        if risk > 0 and progress >= risk:
-            candidate = position.open_price + direction * self._spread_clearing_buffer(info)
+        # book from entry. Triggers as soon as current price is far enough from
+        # the candidate SL to satisfy the broker's stops_level.
+        buffer = self._spread_clearing_buffer(info)
+        stops_level_distance = min_stop_distance(info.stops_level, info.point)
+        # We need progress to be at least the buffer plus the broker's
+        # required distance from current price to the new SL
+        min_progress = buffer + stops_level_distance + info.point
+        if progress >= min_progress:
+            candidate = position.open_price + direction * buffer
             if self._improves(candidate, position.sl, direction):
                 target_sl = candidate
-                target_sl_reason = "breakeven at +1R"
+                target_sl_reason = "breakeven at positive profit"
 
         # Rule 2: secure a small real profit once a fresh base has been
         # cleared, and ratchet SL via structural continuation trailing if the
@@ -664,46 +586,7 @@ class PositionManager:
                             target_sl = candidate
                             target_sl_reason = "zone-contraire defensive breakeven"
 
-        # Rule 4 (volatility guard): EXTREME regime while winning locks in a
-        # fraction of unrealized profit — feeds the same target_sl/_improves
-        # merge as the rules above, so it never fights or loosens whatever
-        # they already proposed.
-        if (
-            volatility_active
-            and regime is VolatilityRegime.EXTREME
-            and progress > 0
-            and self._volatility_config is not None
-        ):
-            candidate = (
-                position.open_price
-                + direction * progress * self._volatility_config.extreme_profit_lock_r_mult
-            )
-            floor = target_sl if target_sl is not None else position.sl
-            if self._improves(candidate, floor, direction):
-                target_sl = candidate
-                target_sl_reason = "volatility guard: EXTREME profit-lock"
-
-        # Rule 5 (volatility guard): HIGH regime with enough running profit
-        # trails SL behind the best favorable price reached since entry by a
-        # multiple of ATR ("chandelier" exit) — same target_sl/_improves
-        # merge, so a pullback that hasn't breached the trailed level never
-        # loosens the stop.
-        if (
-            volatility_active
-            and regime is VolatilityRegime.HIGH
-            and risk > 0
-            and self._volatility_config is not None
-            and atr_value is not None
-            and progress >= self._volatility_config.chandelier_min_profit_r * risk
-        ):
-            atr_distance = self._volatility_config.chandelier_atr_mult * atr_value
-            candidate = favorable - direction * atr_distance
-            floor = target_sl if target_sl is not None else position.sl
-            if self._improves(candidate, floor, direction):
-                target_sl = candidate
-                target_sl_reason = "volatility guard: HIGH-regime chandelier trail"
-
-        # Rule 6 (structure pivot): once this position's peak unrealized R
+        # Rule 4 (structure pivot): once this position's peak unrealized R
         # proxies "a TP1/TP2 leg would have triggered by now" (`arm_r` — see
         # `engine/domain/structure_pivot.py` for why this proxy is used
         # instead of a literal sibling-ticket-closed check, which is not
@@ -733,7 +616,7 @@ class PositionManager:
                     target_sl = candidate
                     target_sl_reason = "structure-pivot profit lock"
 
-        # Rule 7 (give-back): protect profit that was already earned. Runs
+        # Rule 5 (give-back): protect profit that was already earned. Runs
         # last so it sees whatever the rules above proposed and can only
         # tighten further — and it can also decide the position should be
         # closed outright, which no SL candidate can express.

@@ -38,11 +38,6 @@ from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.domain.models import EngineStatus
 from src.engine.domain.regime import EntryRegime, RegimeConfig, compute_entry_regime
-from src.engine.domain.volatility import (
-    VolatilityConfig,
-    VolatilityRegime,
-    latest_volatility_regime,
-)
 from src.engine.ports.strategy_source import StrategySourcePort
 from src.market_data.domain.models import Candle, MarketDataUnavailable, SymbolInfo, Timeframe
 from src.market_data.ports.market_data import MarketDataPort
@@ -97,23 +92,6 @@ def _htf_check(*, passed: bool) -> DecisionCheck:
         value=1.0 if passed else 0.0,
         threshold=1.0,
         comparison="==",
-        passed=passed,
-    )
-
-
-def _volatility_check(
-    percentile: float, config: VolatilityConfig, *, passed: bool
-) -> DecisionCheck:
-    """The ATR-percentile volatility guard as a `DecisionCheck`. `percentile`
-    is NaN when the entry timeframe had no candles to classify — recorded as
-    0.0 (the guard didn't block) rather than letting NaN reach the JSON
-    column, which can't represent it."""
-    value = 0.0 if math.isnan(percentile) else percentile
-    return DecisionCheck(
-        name="volatility_percentile",
-        value=value,
-        threshold=float(config.extreme_percentile),
-        comparison="<",
         passed=passed,
     )
 
@@ -223,7 +201,6 @@ class TradeEngine:
         skill_selector: SkillSelectorPort,
         strategy_source: StrategySourcePort,
         entry_timeframe: str,
-        volatility_config: VolatilityConfig,
         regime_config: RegimeConfig | None = None,
         signal_decisions: SignalDecisionSinkPort | None = None,
         order_book_capture: OrderBookCapturePort | None = None,
@@ -243,12 +220,9 @@ class TradeEngine:
         self._skill_selector = skill_selector
         self._strategy_source = strategy_source
         self._entry_timeframe = entry_timeframe
-        self._volatility_config = volatility_config
-        # Regime tagging (OBSERVABILITY_PLAN.md Phase 6) — always-on and
-        # unconditional, unlike `volatility_config`'s guard: every signal
-        # gets a regime snapshot for analytics regardless of whether the
-        # volatility guard itself is enabled. Defaulted (unlike
-        # `volatility_config`, which is required) so the many existing tests
+        # Regime tagging (OBSERVABILITY_PLAN.md Phase 6) — always-on: every
+        # signal gets a regime snapshot for analytics. Defaulted so the many
+        # existing tests
         # constructing a bare `TradeEngine(...)` don't all need updating —
         # same reasoning `context_bars`/`clock`/`context_builder` above are
         # defaulted for. `None` (rather than a mutable-default-style
@@ -256,7 +230,6 @@ class TradeEngine:
         # rejects for a plain function parameter) resolved to a fresh
         # default instance here.
         self._regime_config = regime_config if regime_config is not None else RegimeConfig()
-        self._volatility_guard_enabled = True
         # Typed decision trail (OBSERVABILITY_PLAN.md Phase 1). Optional so a
         # backtest engine / unit test can run without a database; when absent
         # the human-readable log lines below are all that's produced.
@@ -281,26 +254,6 @@ class TradeEngine:
     @property
     def status(self) -> EngineStatus:
         return replace(self._risk_manager.status, enabled=self._enabled)
-
-    @property
-    def volatility_config(self) -> VolatilityConfig:
-        return self._volatility_config
-
-    @property
-    def volatility_guard_enabled(self) -> bool:
-        return self._volatility_guard_enabled
-
-    def set_volatility_guard_enabled(self, enabled: bool) -> None:
-        """Live-updates whether the volatility guard (EXTREME-regime entry
-        block + SL/TP regime scaling here in `_enter_for_bot`, plus the
-        mirrored EXTREME/HIGH position-management rules in
-        `PositionManager`) is active — takes effect on the very next entry
-        decision. When `False`, entries behave exactly as if
-        `volatility_config` didn't exist (`sl_mult`/`tp_mult` both 1.0, no
-        EXTREME check). Not persisted: a backend restart reverts to
-        `configs/volatility.yaml` (enabled by default)."""
-        self._volatility_guard_enabled = enabled
-        logger.info("trade engine: volatility guard enabled=%s", enabled)
 
     async def on_candle_closed(self, event: CandleClosed) -> None:
         # Engine-loop-duration metric (OBSERVABILITY_PLAN.md Phase 5): the
@@ -692,22 +645,13 @@ class TradeEngine:
         )
         observe_signal_fired(bot=decision.skill_name, symbol=symbol)
 
-        # Regime tagging (OBSERVABILITY_PLAN.md Phase 6) — a new, always-on
-        # snapshot independent of the gated volatility-guard block further
-        # down (which only runs when the guard is enabled and after earlier
-        # gates already passed): every recorded signal needs a regime tag,
-        # not only the ones that reach that gate. Some redundant computation
-        # with the guard below is expected and fine — this is a tagging
-        # concern, not a live risk-management decision, so it's computed
-        # unconditionally here rather than reusing the guard's result. Named
-        # `entry_regime` (not `regime`) to avoid shadowing the volatility
-        # guard's own `regime: VolatilityRegime` local further down.
+        # Regime tagging (OBSERVABILITY_PLAN.md Phase 6) — an always-on
+        # analytics snapshot; nothing below gates or sizes on it.
         tag_entry_frame = ctx.candles.get(strategy.spec.entry_timeframe)
         entry_regime = (
             compute_entry_regime(
                 tag_entry_frame,
                 now=now,
-                volatility_config=self._volatility_config,
                 regime_config=self._regime_config,
             )
             if tag_entry_frame is not None and not tag_entry_frame.empty
@@ -820,77 +764,6 @@ class TradeEngine:
             )
             return balance
 
-        # Volatility guard (bot-agnostic, engine-level): classified off this
-        # bot's own entry timeframe so an M1 scalp bot and an M15 swing bot
-        # on the same symbol each react to their own candle's regime, not a
-        # shared engine-wide one. Computed once for the whole `signals`
-        # tuple (not per-signal) since an EXTREME regime blocks the entire
-        # entry, not individual tiered TPs. Skipped entirely when the live
-        # on/off switch (`set_volatility_guard_enabled`) is off — entries
-        # then behave exactly as if `volatility_config` didn't exist.
-        if self._volatility_guard_enabled:
-            entry_frame = ctx.candles.get(strategy.spec.entry_timeframe)
-            if entry_frame is not None and not entry_frame.empty:
-                regime, percentile, _atr_value = latest_volatility_regime(
-                    entry_frame["high"].to_numpy(),
-                    entry_frame["low"].to_numpy(),
-                    entry_frame["close"].to_numpy(),
-                    atr_period=self._volatility_config.atr_period,
-                    regime_lookback_bars=self._volatility_config.regime_lookback_bars,
-                    low_percentile=self._volatility_config.low_percentile,
-                    high_percentile=self._volatility_config.high_percentile,
-                    extreme_percentile=self._volatility_config.extreme_percentile,
-                )
-            else:
-                regime, percentile = VolatilityRegime.NORMAL, float("nan")
-
-            if regime is VolatilityRegime.EXTREME:
-                logger.info(
-                    "ENTRY BLOCKED (volatility guard): %s %s [%s] — regime=EXTREME "
-                    "percentile=%.1f (BYPASSED PER USER REQUEST)",
-                    symbol,
-                    first_signal.direction.value,
-                    decision.skill_name,
-                    percentile,
-                )
-                # await self._record_outcome(...)
-                # return balance
-                # Bypassed Volatility Guard
-            await self._record_checks(
-                signal_id, _volatility_check(percentile, self._volatility_config, passed=True)
-            )
-
-            sl_mult, tp_mult = {
-                VolatilityRegime.LOW: (
-                    self._volatility_config.sl_multiplier_low,
-                    self._volatility_config.tp_multiplier_low,
-                ),
-                VolatilityRegime.NORMAL: (
-                    self._volatility_config.sl_multiplier_normal,
-                    self._volatility_config.tp_multiplier_normal,
-                ),
-                VolatilityRegime.HIGH: (
-                    self._volatility_config.sl_multiplier_high,
-                    self._volatility_config.tp_multiplier_high,
-                ),
-                # EXTREME has no dedicated multiplier field — before the
-                # volatility guard was bypassed, EXTREME always returned
-                # early above and this lookup never ran for it. Now that an
-                # EXTREME-regime signal reaches sizing too, an unhandled key
-                # here would KeyError and (same failure mode as every other
-                # uncaught exception in this loop) abort every other
-                # candidate bot's entry evaluation for the candle. HIGH's
-                # multiplier is the widest of the three defined tiers, so it
-                # errs toward a wider SL/TP rather than an unscaled one that
-                # would be too tight for genuinely extreme volatility.
-                VolatilityRegime.EXTREME: (
-                    self._volatility_config.sl_multiplier_high,
-                    self._volatility_config.tp_multiplier_high,
-                ),
-            }[regime]
-        else:
-            sl_mult, tp_mult = 1.0, 1.0
-
         # Split risk across multiple targets so total risk per trade setup
         # remains aligned with user config
 
@@ -933,8 +806,8 @@ class TradeEngine:
             side = Side(signal.direction.value)
             reference_price = info.ask if side is Side.BUY else info.bid
             sign = 1 if side is Side.BUY else -1
-            sl_price = reference_price - sign * signal.sl_points * sl_mult
-            tp_price = reference_price + sign * signal.tp_points * tp_mult
+            sl_price = reference_price - sign * signal.sl_points
+            tp_price = reference_price + sign * signal.tp_points
 
             size_multiplier = _clamp_size_multiplier(signal.size_multiplier)
             effective_risk_multiplier = pos_risk_multiplier * size_multiplier

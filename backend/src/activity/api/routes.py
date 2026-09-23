@@ -149,7 +149,7 @@ async def get_bot_signals(
     description=(
         "Answers 'of N signals this bot fired, why did only M trade?' — for each bot that "
         "fired at least one signal in the window, the count surviving each engine gate "
-        "(HTF confirmation and the pre-trade risk gate, then the volatility guard / "
+        "(HTF confirmation and the pre-trade risk gate, then the "
         "open-position cap / lot sizing, then the broker's spread cap and spread-adjusted "
         "risk-reward floor, then the fill) plus the grouped reasons everything else "
         "dropped out. Ordered busiest bot first. Built purely from the typed "

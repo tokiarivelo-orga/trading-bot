@@ -1,11 +1,10 @@
 from src.alerting.domain.models import AlertingConfig
 from src.broker.domain.account import AccountConfig
-from src.engine.domain.volatility import VolatilityConfig
 from src.shared.config.loaders import (
     load_accounts_config,
     load_alerting_config,
     load_maintenance_config,
-    load_volatility_config,
+    load_regime_config,
 )
 from src.shared.config.maintenance import MaintenanceConfig
 from src.shared.config.settings import CONFIGS_DIR
@@ -36,27 +35,21 @@ def test_load_maintenance_config_returns_typed_config():
     assert config.wal_checkpoint_interval_minutes > 0
 
 
-def test_load_volatility_config_returns_typed_config_with_expected_defaults():
-    # high_percentile/extreme_percentile/sl_multiplier_high/tp_multiplier_high
-    # reflect Phase D's tuned values (2026-08 grid search), not the Phase A
-    # originals — see the rationale comments in configs/volatility.yaml.
-    config = load_volatility_config(CONFIGS_DIR)
-    assert isinstance(config, VolatilityConfig)
-    assert config.atr_period == 14
-    assert config.regime_lookback_bars == 100
-    assert config.low_percentile == 20
-    assert config.high_percentile == 60
-    assert config.extreme_percentile == 98
-    assert config.sl_multiplier_low == 0.85
-    assert config.sl_multiplier_normal == 1.0
-    assert config.sl_multiplier_high == 1.45
-    assert config.tp_multiplier_low == 0.85
-    assert config.tp_multiplier_normal == 1.0
-    assert config.tp_multiplier_high == 1.45
-    assert config.extreme_close_if_losing is True
-    assert config.extreme_profit_lock_r_mult == 0.5
-    assert config.chandelier_atr_mult == 2.0
-    assert config.chandelier_min_profit_r == 1.0
+def test_load_regime_config_carries_the_volatility_tag_thresholds():
+    # The volatility bucket is a tag only now (the guard that acted on it is
+    # gone); its thresholds moved from the deleted volatility.yaml into
+    # regime.yaml unchanged, so `regime_volatility` stays comparable with
+    # historical trades.
+    config = load_regime_config(CONFIGS_DIR)
+    assert config.volatility_atr_period == 14
+    assert config.volatility_lookback_bars == 100
+    assert config.volatility_low_percentile == 20
+    assert config.volatility_high_percentile == 60
+    assert config.volatility_extreme_percentile == 98
+
+
+def test_volatility_yaml_is_gone():
+    assert not (CONFIGS_DIR / "volatility.yaml").exists()
 
 
 def test_load_alerting_config_includes_silence_tuning():

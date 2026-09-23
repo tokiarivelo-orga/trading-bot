@@ -136,8 +136,9 @@ class FakeSignalDecisionRepository:
         times = [int(d.created_at.timestamp()) for d in self.decisions]
         return min(times) if times else None
 
-    def list_between(self, *, account_id="default", created_from=None, created_to=None,
-                     bot=None, limit=20000):
+    def list_between(
+        self, *, account_id="default", created_from=None, created_to=None, bot=None, limit=20000
+    ):
         rows = self.decisions if bot is None else [d for d in self.decisions if d.bot == bot]
         if created_from is not None:
             rows = [d for d in rows if int(d.created_at.timestamp()) >= created_from]
@@ -145,11 +146,10 @@ class FakeSignalDecisionRepository:
             rows = [d for d in rows if int(d.created_at.timestamp()) <= created_to]
         return sorted(rows, key=lambda d: d.created_at)
 
-    def list_for_bot(self, *, bot, account_id="default", created_from=None, created_to=None,
-                     limit=5000):
-        self.calls.append(
-            dict(bot=bot, created_from=created_from, created_to=created_to)
-        )
+    def list_for_bot(
+        self, *, bot, account_id="default", created_from=None, created_to=None, limit=5000
+    ):
+        self.calls.append(dict(bot=bot, created_from=created_from, created_to=created_to))
         rows = [d for d in self.decisions if d.bot == bot]
         if created_from is not None:
             rows = [d for d in rows if int(d.created_at.timestamp()) >= created_from]
@@ -257,9 +257,7 @@ async def test_get_signal_funnel_aggregates_the_typed_table_per_bot():
             _decision(1300, bot="normal/xauusd/other", outcome="opened"),
         ]
     )
-    service = ActivityLogService(
-        FakeLoggerFilteringRepository([]), signal_decisions=decisions
-    )
+    service = ActivityLogService(FakeLoggerFilteringRepository([]), signal_decisions=decisions)
 
     funnels = await service.get_signal_funnel(created_from=0, created_to=9999)
 
@@ -276,9 +274,7 @@ async def test_get_signal_funnel_can_be_narrowed_to_one_bot():
             _decision(1100, bot="normal/xauusd/other"),
         ]
     )
-    service = ActivityLogService(
-        FakeLoggerFilteringRepository([]), signal_decisions=decisions
-    )
+    service = ActivityLogService(FakeLoggerFilteringRepository([]), signal_decisions=decisions)
 
     funnels = await service.get_signal_funnel(skill=skill, created_from=0)
 

@@ -83,9 +83,7 @@ async def test_silent_bot_publishes_bot_went_silent_once():
 async def test_bot_recovering_allows_a_future_re_alert():
     # Regular 10-min cadence ending exactly at T0 — establishes a 10-min
     # median / 50-min (5x) threshold.
-    decisions = [
-        _decision("bot-c", m) for m in (50, 40, 30, 20, 10, 0)
-    ]
+    decisions = [_decision("bot-c", m) for m in (50, 40, 30, 20, 10, 0)]
     repo = FakeSignalDecisionRepository(decisions)
     event_bus = EventBus()
     published, handler = _collector()

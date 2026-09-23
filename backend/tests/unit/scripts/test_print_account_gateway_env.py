@@ -75,7 +75,6 @@ def test_main_prefers_mt5_terminal_path_when_only_it_is_set(monkeypatch, capsys)
     out = capsys.readouterr().out
     # shlex.quote only wraps in quotes when needed — no spaces here, so it's bare.
     assert (
-        "export TB_RESOLVED_TERMINAL_PATH=/home/user/.mt5/drive_c/MT5-demo-1/terminal64.exe"
-        in out
+        "export TB_RESOLVED_TERMINAL_PATH=/home/user/.mt5/drive_c/MT5-demo-1/terminal64.exe" in out
     )
     assert "export TB_RESOLVED_TERMINAL_SUBPATH=''" in out

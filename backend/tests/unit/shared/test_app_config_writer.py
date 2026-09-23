@@ -15,7 +15,7 @@ APP_YAML = (
     "# Global app configuration. Hot-reloadable.\n"
     "mode: live              # paper | live  — NEVER switch to live before Phase 9 criteria\n"
     'timezone: "Indian/Antananarivo"\n'
-    'symbols: [XAUUSD, XAGUSD]\n'
+    "symbols: [XAUUSD, XAGUSD]\n"
     "engine:\n"
     "  enabled: true\n"
     "  entry_timeframe: M5\n"

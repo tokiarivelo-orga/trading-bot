@@ -366,8 +366,8 @@ export interface TradeHistoryItem {
   close_price: number | null;
   close_time: number | null; // epoch seconds UTC, null while open
   profit: number | null;
-  /** Why the engine's position manager closed this trade, e.g. "volatility
-   * guard: EXTREME regime while losing" or "time-stop: no progress". Null
+  /** Why the engine's position manager closed this trade, e.g. "time-stop:
+   * no progress". Null
    * for normal SL/TP fills or manual/API closes. */
   close_reason: string | null;
   comment: string;
@@ -771,7 +771,8 @@ export interface BacktestSignal {
   time: number; // epoch seconds UTC — simulated bot clock (bar close time), or live wall clock
   direction: "buy" | "sell";
   /** 'opened' (became a trade), 'htf_veto' (higher-TF trend opposed it),
-   * 'volatility_guard' (ATR regime EXTREME), 'max_positions' (open-position
+   * 'volatility_guard' (legacy rows only — that guard was removed),
+   * 'max_positions' (open-position
    * cap), 'risk_sizing' (no tradable lot size), 'spread_veto' (live spread
    * over the cap), 'rr_gate' (spread-adjusted risk-reward floor),
    * 'daily_loss_breaker' (a circuit breaker had the engine paused),
@@ -1743,38 +1744,6 @@ export interface CoreRiskCapsUpdate {
  * unlike a per-account risk_override_file. */
 export const putCoreRiskCaps = (accountId: string, update: CoreRiskCapsUpdate) =>
   api.put<RiskCaps>(acctPath(accountId, "/engine/risk-caps/core"), update);
-
-/** ATR-percentile-based volatility regime classifier that scales bots' SL/TP
- * and can force-close/trail positions in high volatility. */
-export interface VolatilityConfig {
-  atr_period: number;
-  regime_lookback_bars: number;
-  low_percentile: number;
-  high_percentile: number;
-  extreme_percentile: number;
-  sl_multiplier_low: number;
-  sl_multiplier_normal: number;
-  sl_multiplier_high: number;
-  tp_multiplier_low: number;
-  tp_multiplier_normal: number;
-  tp_multiplier_high: number;
-  extreme_close_if_losing: boolean;
-  extreme_profit_lock_r_mult: number;
-  chandelier_atr_mult: number;
-  chandelier_min_profit_r: number;
-  /** Live on/off switch for the whole volatility guard. */
-  enabled: boolean;
-}
-
-export const getVolatilityConfig = (accountId: string) =>
-  api.get<VolatilityConfig>(acctPath(accountId, "/engine/volatility-config"));
-/** Live-updates the volatility guard on/off switch on the running engine.
- * Not persisted — a backend restart reverts to configs/volatility.yaml
- * (default: enabled). */
-export const putVolatilityGuardEnabled = (accountId: string, enabled: boolean) =>
-  api.put<VolatilityConfig>(acctPath(accountId, "/engine/volatility-config/enabled"), {
-    enabled,
-  });
 
 // ── Broker: manual trading (chart buttons, click-to-trade, draggable SL/TP) ─
 

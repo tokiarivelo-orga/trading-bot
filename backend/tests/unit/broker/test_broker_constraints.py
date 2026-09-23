@@ -175,9 +175,7 @@ class TestRoundVolume:
     def test_rounds_down_onto_the_step_grid(self) -> None:
         # Never up: rounding up would size the position larger than the risk
         # manager approved.
-        rounded, violation = round_volume(
-            0.037, volume_min=0.01, volume_max=10.0, volume_step=0.01
-        )
+        rounded, violation = round_volume(0.037, volume_min=0.01, volume_max=10.0, volume_step=0.01)
         assert rounded == pytest.approx(0.03)
         assert violation is None
 
@@ -194,9 +192,7 @@ class TestRoundVolume:
         assert violation is None
 
     def test_volume_rounding_below_minimum_is_a_rejection_not_a_bump(self) -> None:
-        rounded, violation = round_volume(
-            0.004, volume_min=0.01, volume_max=10.0, volume_step=0.01
-        )
+        rounded, violation = round_volume(0.004, volume_min=0.01, volume_max=10.0, volume_step=0.01)
         assert rounded == pytest.approx(0.0)
         assert violation is not None
         assert violation.reason == REASON_VOLUME_BELOW_MIN
@@ -216,9 +212,7 @@ class TestRoundVolume:
         assert violation.reason == REASON_VOLUME_BELOW_MIN
 
     def test_a_zero_step_leaves_the_volume_alone(self) -> None:
-        rounded, violation = round_volume(
-            0.037, volume_min=0.01, volume_max=10.0, volume_step=0.0
-        )
+        rounded, violation = round_volume(0.037, volume_min=0.01, volume_max=10.0, volume_step=0.0)
         assert rounded == pytest.approx(0.037)
         assert violation is None
 

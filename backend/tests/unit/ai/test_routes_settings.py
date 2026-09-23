@@ -175,9 +175,7 @@ async def test_test_provider_ok(api):
 
 
 async def test_test_provider_with_message_returns_reply(api):
-    response = await api.post(
-        "/ai/settings/providers/claude/test", json={"message": "hello"}
-    )
+    response = await api.post("/ai/settings/providers/claude/test", json={"message": "hello"})
     assert response.status_code == 200
     body = response.json()
     assert body["ok"] is True

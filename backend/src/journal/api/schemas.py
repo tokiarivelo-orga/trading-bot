@@ -89,7 +89,7 @@ class TradeRecordOut(BaseModel):
         default=None,
         description=(
             "Why the position was closed by the engine's position manager, e.g. "
-            "'volatility guard: EXTREME regime while losing' or 'time-stop: no progress'. "
+            "'give-back trail: ...' or 'time-stop: no progress'. "
             "Null for normal SL/TP fills or manual/API closes, which don't set a reason."
         ),
     )

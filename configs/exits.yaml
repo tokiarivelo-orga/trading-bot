@@ -1,5 +1,5 @@
 # GIVE-BACK EXIT POLICY.
-# Trading-behaviour config, like volatility.yaml — safe to hand-edit. Not a
+# Trading-behaviour config, like risk.yaml — safe to hand-edit. Not a
 # risk cap: it can only ever tighten a stop or close a position early, never
 # increase exposure, and it does not touch risk.yaml, the consecutive-loss
 # pause, or the kill switch.

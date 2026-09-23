@@ -319,14 +319,17 @@ class SkillAssignmentService:
             raise UnknownBotError(f"{symbol!r} has no bot named {bot_slug!r}")
         await asyncio.to_thread(self._repository.delete, symbol, bot_slug)
         self._selector.remove(symbol, bot_slug)
-        
+
         # Check if it was the last bot
         remaining_bots = await asyncio.to_thread(self._repository.list_for_symbol, symbol)
         if not remaining_bots:
             from src.shared.config.app_config_writer import remove_symbol_from_app_config
+
             await asyncio.to_thread(remove_symbol_from_app_config, symbol, self._configs_dir)
             for candle_stream in self._candle_streams:
                 candle_stream.remove_symbol(symbol)
-            logger.info("symbol %s removed from automated trading because its last bot was deleted", symbol)
-            
+            logger.info(
+                "symbol %s removed from automated trading because its last bot was deleted", symbol
+            )
+
         logger.info("bot %s removed from %s", bot_slug, symbol)

@@ -125,8 +125,7 @@ async def test_ratchets_sl_to_just_beyond_a_fresh_lh_for_a_sell() -> None:
 @pytest.mark.asyncio
 async def test_no_config_reproduces_previous_behaviour() -> None:
     """`structure_pivot_config=None` must be a true no-op — the same
-    escape hatch `exit_policy_config=None`/`volatility_config=None` already
-    give the other optional rules."""
+    escape hatch `exit_policy_config=None` already gives the give-back rule."""
     candles, open_time = _uptrend_pivot_candles()
     with_config = FakeOrderService(
         [_position(open_price=2400.0, sl=2390.0, tp=2500.0, open_time=open_time)]

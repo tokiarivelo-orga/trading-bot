@@ -132,9 +132,7 @@ def test_delete_missing_indicator_raises(service):
 
 def test_compute_returns_aligned_series(service):
     created = service.create(name="sma3", code=VALID_CODE, default_params={"period": 3})
-    result = service.compute(
-        created.id, symbol="XAUUSD", timeframe="M5", period="2026-06:2026-07"
-    )
+    result = service.compute(created.id, symbol="XAUUSD", timeframe="M5", period="2026-06:2026-07")
     assert result.error is None
     assert len(result.times) == len(result.series["value"])
     assert result.series["value"][0] is None  # warm-up gap before period=3 fills in
@@ -143,9 +141,7 @@ def test_compute_returns_aligned_series(service):
 
 def test_compute_missing_indicator_raises(service):
     with pytest.raises(ValueError):
-        service.compute(
-            "does-not-exist", symbol="XAUUSD", timeframe="M5", period="2026-06:2026-07"
-        )
+        service.compute("does-not-exist", symbol="XAUUSD", timeframe="M5", period="2026-06:2026-07")
 
 
 def test_compute_no_candles_returns_error_not_exception(service):

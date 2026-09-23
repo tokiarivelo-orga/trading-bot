@@ -12,10 +12,7 @@ from src.engine.api.schemas import (
     UpdateCoreRiskCapsIn,
     UpdateMaxTradesPerDayEnabledIn,
     UpdateMinLotFallbackIn,
-    UpdateVolatilityGuardEnabledIn,
-    VolatilityConfigOut,
 )
-from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.application.trade_loop import TradeEngine
 from src.shared.api.dependencies import AccountRuntimeDep
@@ -29,16 +26,6 @@ def _engine(account: AccountRuntimeDep) -> TradeEngine:
 
 def _risk_manager(account: AccountRuntimeDep) -> RiskManager:
     return account.risk_manager
-
-
-def _position_manager(account: AccountRuntimeDep) -> PositionManager:
-    return account.position_manager
-
-
-def _volatility_config_out(engine: TradeEngine) -> VolatilityConfigOut:
-    return VolatilityConfigOut(
-        **asdict(engine.volatility_config), enabled=engine.volatility_guard_enabled
-    )
 
 
 @router.get(
@@ -174,46 +161,3 @@ async def update_core_risk_caps(
         consecutive_loss_pause_enabled=body.consecutive_loss_pause_enabled,
     )
     return RiskCapsOut(**asdict(_risk_manager(account).caps))
-
-
-@router.get(
-    "/volatility-config",
-    response_model=VolatilityConfigOut,
-    summary="Get the live engine's current volatility-guard config",
-    description=(
-        "Returns every field the running volatility guard is classifying regimes and scaling "
-        "SL/TP/exits with right now — see `engine/domain/volatility.py`. Matches "
-        "`configs/volatility.yaml` on disk except for `enabled`, which reflects whether "
-        "`PUT /engine/volatility-config/enabled` has turned the guard off since the last "
-        "backend restart (on by default). `enabled` is read from `TradeEngine` as the single "
-        "source of truth — the PUT route below sets it on both `TradeEngine` and "
-        "`PositionManager` together."
-    ),
-)
-async def get_volatility_config(account: AccountRuntimeDep) -> VolatilityConfigOut:
-    return _volatility_config_out(_engine(account))
-
-
-@router.put(
-    "/volatility-config/enabled",
-    response_model=VolatilityConfigOut,
-    summary="Enable/disable the volatility guard, live",
-    description=(
-        "Updates, on the running engine, whether the volatility guard is active at all: the "
-        "EXTREME-regime entry block and LOW/NORMAL/HIGH SL/TP scaling in `TradeEngine."
-        "_enter_for_bot`, and the EXTREME-forced-close, EXTREME-profit-lock, and HIGH-chandelier-"
-        "trailing rules in `PositionManager._manage`. Both move together as one feature — this "
-        "call sets the flag on both `TradeEngine` and `PositionManager`. When false, entries and "
-        "position management behave exactly as if `volatility_config` didn't exist. Takes "
-        "effect on the very next entry/candle-close decision. **Not persisted** — a backend "
-        "restart reverts to enabled, matching `configs/volatility.yaml` (see CLAUDE.md: this is "
-        "trading-behavior config, not a secret, but generated/AI refinement code must not touch "
-        "it outside its documented workflow)."
-    ),
-)
-async def update_volatility_guard_enabled(
-    body: UpdateVolatilityGuardEnabledIn, account: AccountRuntimeDep
-) -> VolatilityConfigOut:
-    _engine(account).set_volatility_guard_enabled(body.enabled)
-    _position_manager(account).set_volatility_guard_enabled(body.enabled)
-    return _volatility_config_out(_engine(account))

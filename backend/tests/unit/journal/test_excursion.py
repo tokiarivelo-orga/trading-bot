@@ -87,17 +87,13 @@ def opened(side: str = "buy") -> PositionOpened:
 
 
 def test_a_buys_excursion_is_high_above_entry_and_low_below_it():
-    result = extend_excursion(
-        Excursion(), side="buy", open_price=ENTRY, high=2405.0, low=2397.0
-    )
+    result = extend_excursion(Excursion(), side="buy", open_price=ENTRY, high=2405.0, low=2397.0)
     assert result.mfe == pytest.approx(5.0)
     assert result.mae == pytest.approx(3.0)
 
 
 def test_a_sells_excursion_mirrors_a_buys():
-    result = extend_excursion(
-        Excursion(), side="sell", open_price=ENTRY, high=2405.0, low=2397.0
-    )
+    result = extend_excursion(Excursion(), side="sell", open_price=ENTRY, high=2405.0, low=2397.0)
     assert result.mfe == pytest.approx(3.0)
     assert result.mae == pytest.approx(5.0)
 
@@ -105,9 +101,7 @@ def test_a_sells_excursion_mirrors_a_buys():
 def test_a_candle_entirely_on_one_side_of_entry_never_reports_negative_excursion():
     """A buy whose candle never traded below entry has zero adverse
     excursion, not a negative one — MFE/MAE are magnitudes."""
-    result = extend_excursion(
-        Excursion(), side="buy", open_price=ENTRY, high=2406.0, low=2402.0
-    )
+    result = extend_excursion(Excursion(), side="buy", open_price=ENTRY, high=2406.0, low=2402.0)
     assert result.mfe == pytest.approx(6.0)
     assert result.mae == pytest.approx(0.0)
 
@@ -142,9 +136,7 @@ async def test_a_freshly_opened_trade_starts_measured_at_zero(service, repositor
     assert (record.mfe, record.mae) == (0.0, 0.0)
 
 
-async def test_excursion_widens_over_successive_candles(
-    service, repository, market_context
-):
+async def test_excursion_widens_over_successive_candles(service, repository, market_context):
     await service.on_position_opened(opened())
 
     market_context.serve(high=2403.0, low=2399.0)
@@ -158,9 +150,7 @@ async def test_excursion_widens_over_successive_candles(
     assert record.mae == pytest.approx(1.0)  # from the first candle only
 
 
-async def test_only_the_excursion_timeframe_is_accumulated(
-    service, repository, market_context
-):
+async def test_only_the_excursion_timeframe_is_accumulated(service, repository, market_context):
     """The same symbol may stream several timeframes; counting each of them
     would be redundant work for identical results."""
     await service.on_position_opened(opened())

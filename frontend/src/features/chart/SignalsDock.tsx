@@ -44,7 +44,7 @@ function toTradeHistoryItem(
     close_time: trade.close_time,
     profit: trade.profit,
     // BacktestTrade doesn't report a close reason (backtests don't run the
-    // live position manager's volatility guard/time-stop rules).
+    // live position manager's time-stop/give-back rules).
     close_reason: null,
     comment: "",
     strategy_version: meta?.strategy ?? null,

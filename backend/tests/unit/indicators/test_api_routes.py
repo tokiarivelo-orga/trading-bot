@@ -114,9 +114,7 @@ async def test_get_indicator_not_found(api):
 
 
 async def test_edit_indicator(api):
-    created = (
-        await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})
-    ).json()
+    created = (await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})).json()
     new_code = VALID_CODE.replace('"period", 3', '"period", 5')
     response = await api.post(f"/indicators/{created['id']}/edit", json={"code": new_code})
     assert response.status_code == 200
@@ -125,12 +123,8 @@ async def test_edit_indicator(api):
 
 
 async def test_edit_rejects_invalid_code(api):
-    created = (
-        await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})
-    ).json()
-    response = await api.post(
-        f"/indicators/{created['id']}/edit", json={"code": INVALID_CODE}
-    )
+    created = (await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})).json()
+    response = await api.post(f"/indicators/{created['id']}/edit", json={"code": INVALID_CODE})
     assert response.status_code == 422
 
 
@@ -140,29 +134,21 @@ async def test_edit_not_found(api):
 
 
 async def test_duplicate_indicator(api):
-    created = (
-        await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})
-    ).json()
-    response = await api.post(
-        f"/indicators/{created['id']}/duplicate", json={"name": "sma3-copy"}
-    )
+    created = (await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})).json()
+    response = await api.post(f"/indicators/{created['id']}/duplicate", json={"name": "sma3-copy"})
     assert response.status_code == 200
     assert response.json()["name"] == "sma3-copy"
     assert response.json()["code"] == VALID_CODE
 
 
 async def test_duplicate_rejects_name_conflict(api):
-    created = (
-        await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})
-    ).json()
+    created = (await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})).json()
     response = await api.post(f"/indicators/{created['id']}/duplicate", json={"name": "sma3"})
     assert response.status_code == 409
 
 
 async def test_delete_indicator(api):
-    created = (
-        await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})
-    ).json()
+    created = (await api.post("/indicators", json={"name": "sma3", "code": VALID_CODE})).json()
     delete_response = await api.delete(f"/indicators/{created['id']}")
     assert delete_response.status_code == 204
     assert (await api.get(f"/indicators/{created['id']}")).status_code == 404

@@ -21,7 +21,11 @@ import numpy as np
 import pandas as pd
 
 from src.engine.domain.volatility import (
-    VolatilityConfig,
+    DEFAULT_ATR_PERIOD,
+    DEFAULT_EXTREME_PERCENTILE,
+    DEFAULT_HIGH_PERCENTILE,
+    DEFAULT_LOW_PERCENTILE,
+    DEFAULT_REGIME_LOOKBACK_BARS,
     VolatilityRegime,
     latest_volatility_regime,
 )
@@ -49,8 +53,16 @@ class RegimeConfig:
     """Mirrors `configs/regime.yaml` (see `shared.config.loaders.
     load_regime_config`). `adx_period`/`adx_trend_threshold` drive
     `classify_trend_regime`/`latest_trend_regime`; the `session_*_hour`
-    fields are UTC-hour boundaries consumed by `session_for`."""
+    fields are UTC-hour boundaries consumed by `session_for`; the
+    `volatility_*` fields drive the ATR-percentile volatility bucket
+    (`engine.domain.volatility.latest_volatility_regime`) — a tag only,
+    nothing reads it to gate or size a trade."""
 
+    volatility_atr_period: int = DEFAULT_ATR_PERIOD
+    volatility_lookback_bars: int = DEFAULT_REGIME_LOOKBACK_BARS
+    volatility_low_percentile: float = DEFAULT_LOW_PERCENTILE
+    volatility_high_percentile: float = DEFAULT_HIGH_PERCENTILE
+    volatility_extreme_percentile: float = DEFAULT_EXTREME_PERCENTILE
     adx_period: int = DEFAULT_ADX_PERIOD
     adx_trend_threshold: float = DEFAULT_ADX_TREND_THRESHOLD
     session_overlap_start_hour: int = 12
@@ -203,15 +215,13 @@ def compute_entry_regime(
     entry_frame: pd.DataFrame | None,
     *,
     now: datetime,
-    volatility_config: VolatilityConfig,
     regime_config: RegimeConfig,
 ) -> EntryRegime | None:
     """One-shot regime read for the engine's entry path
     (`engine/application/trade_loop.py`): `None` when `entry_frame` is
     `None` or empty — never fabricate a regime for a bot with no candles.
     Otherwise pulls `high`/`low`/`close` off the bot's own entry-timeframe
-    DataFrame (same array-extraction idiom the existing volatility guard
-    uses) and classifies volatility, trend, and session in one call."""
+    DataFrame and classifies volatility, trend, and session in one call."""
     if entry_frame is None or entry_frame.empty:
         return None
     highs = entry_frame["high"].to_numpy()
@@ -222,11 +232,11 @@ def compute_entry_regime(
         highs,
         lows,
         closes,
-        atr_period=volatility_config.atr_period,
-        regime_lookback_bars=volatility_config.regime_lookback_bars,
-        low_percentile=volatility_config.low_percentile,
-        high_percentile=volatility_config.high_percentile,
-        extreme_percentile=volatility_config.extreme_percentile,
+        atr_period=regime_config.volatility_atr_period,
+        regime_lookback_bars=regime_config.volatility_lookback_bars,
+        low_percentile=regime_config.volatility_low_percentile,
+        high_percentile=regime_config.volatility_high_percentile,
+        extreme_percentile=regime_config.volatility_extreme_percentile,
     )
     trend, adx_value = latest_trend_regime(
         highs,

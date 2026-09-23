@@ -66,11 +66,7 @@ async def test_complete_joins_multiple_response_parts(monkeypatch):
         request = httpx.Request("POST", f"{base_url}{path}")
         return httpx.Response(
             200,
-            json={
-                "candidates": [
-                    {"content": {"parts": [{"text": "hello "}, {"text": "world"}]}}
-                ]
-            },
+            json={"candidates": [{"content": {"parts": [{"text": "hello "}, {"text": "world"}]}}]},
             request=request,
         )
 

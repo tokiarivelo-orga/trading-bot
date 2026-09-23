@@ -52,9 +52,9 @@ from src.market_data.adapters.replay import ReplayMarketDataPort, SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
 from src.market_data.domain.models import Candle, Timeframe
 from src.shared.config.loaders import (
+    load_regime_config,
     load_risk_caps,
     load_symbol_trading_config_if_exists,
-    load_volatility_config,
 )
 from src.shared.config.settings import CONFIGS_DIR, load_yaml_config
 from src.shared.db.base import make_session_factory
@@ -208,7 +208,7 @@ async def run_backtest(
             )
     resolved_min_rr = symbol_config.min_rr if symbol_config is not None else DEFAULT_MIN_RR
     risk_caps = load_risk_caps(configs_dir)
-    volatility_config = load_volatility_config(configs_dir)
+    regime_config = load_regime_config(configs_dir)
     if min_lot_fallback_enabled is not None or max_risk_per_trade_pct is not None:
         risk_caps = dataclasses.replace(
             risk_caps,
@@ -310,9 +310,7 @@ async def run_backtest(
         clock=clock,
     )
     risk_manager = RiskManager(caps=risk_caps, timezone=timezone)
-    position_manager = PositionManager(
-        order_service=order_service, market_data=replay, volatility_config=volatility_config
-    )
+    position_manager = PositionManager(order_service=order_service, market_data=replay)
 
     bookkeeper = BacktestBookkeeper(
         starting_balance=starting_balance,
@@ -336,7 +334,7 @@ async def run_backtest(
         skill_selector=FixedSkillSelector(strategy_name),
         strategy_source=registry,
         entry_timeframe=strategy.spec.entry_timeframe,
-        volatility_config=volatility_config,
+        regime_config=regime_config,
         clock=clock,
         context_builder=CachedContextBuilder(candles),
         signal_decisions=decision_sink,

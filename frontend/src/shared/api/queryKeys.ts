@@ -103,14 +103,6 @@ export const queryKeys = {
     trades: (accountId: string | null, filtersKey: string, page: number) =>
       ["history", "trades", accountId, filtersKey, page] as const,
   },
-  engine: {
-    /** `GET /accounts/{id}/engine/volatility-config` — the ATR-percentile
-     * volatility guard's on/off switch and thresholds/multipliers. Shared by
-     * `features/settings/VolatilityGuardPanel.tsx` and the chart toolbar
-     * toggle so both stay in sync via the same cache entry. */
-    volatilityConfig: (accountId: string | null) =>
-      ["engine", "volatilityConfig", accountId] as const,
-  },
   modelTraining: {
     /** `GET /model-training/runs` — process-wide, not scoped by account (see
      * that router's docstring: one set of model weights shared by every

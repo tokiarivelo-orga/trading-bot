@@ -21,7 +21,9 @@ export const SIGNAL_OUTCOME_META: Record<
   // Phase 2). Every consumer indexes this map unguarded, so a new backend
   // outcome MUST land here in the same change or the chart crashes.
   rr_gate: { label: "RR gate", className: "text-err", token: "--color-err" },
-  volatility_guard: { label: "volatility guard", className: "text-sell", token: "--color-sell" },
+  // Legacy: the engine's volatility guard was removed, but rows recorded
+  // while it existed still carry this outcome.
+  volatility_guard: { label: "volatility guard (legacy)", className: "text-sell", token: "--color-sell" },
   max_positions: { label: "max positions", className: "text-err", token: "--color-err" },
   risk_sizing: { label: "risk sizing", className: "text-err", token: "--color-err" },
   daily_loss_breaker: { label: "circuit breaker", className: "text-err", token: "--color-err" },

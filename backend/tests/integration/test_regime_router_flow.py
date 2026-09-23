@@ -6,8 +6,8 @@ through the real `run_backtest()` driving the exact same
 `TradeEngine`/`RiskManager`/`PositionManager`/`OrderService` pipeline live
 trading uses, against `PaperBroker` — genuine paper-mode, never live.
 
-Uses the real `configs/` (risk.yaml, symbols/xauusd.yaml, regime.yaml,
-volatility.yaml) since those are the project's actual checked-in trading
+Uses the real `configs/` (risk.yaml, symbols/xauusd.yaml, regime.yaml)
+since those are the project's actual checked-in trading
 config, same convention `test_phase5_backtest_flow.py` follows — no fixture
 config needed.
 

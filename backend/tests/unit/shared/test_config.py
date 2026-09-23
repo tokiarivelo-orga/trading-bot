@@ -32,27 +32,13 @@ def test_every_enabled_symbol_has_a_symbol_config():
         assert cfg["min_rr"] >= 1.0
 
 
-def test_volatility_config_has_classifier_and_regime_fields():
-    cfg = load_yaml_config("volatility")
-    for key in (
-        "atr_period",
-        "regime_lookback_bars",
-        "low_percentile",
-        "high_percentile",
-        "extreme_percentile",
-        "sl_multiplier_low",
-        "sl_multiplier_normal",
-        "sl_multiplier_high",
-        "tp_multiplier_low",
-        "tp_multiplier_normal",
-        "tp_multiplier_high",
-        "extreme_close_if_losing",
-        "extreme_profit_lock_r_mult",
-        "chandelier_atr_mult",
-        "chandelier_min_profit_r",
-    ):
-        assert key in cfg, f"volatility.yaml missing {key}"
-    assert cfg["low_percentile"] < cfg["high_percentile"] < cfg["extreme_percentile"]
+def test_regime_config_has_ordered_volatility_percentiles():
+    cfg = load_yaml_config("regime")
+    assert (
+        cfg["volatility_low_percentile"]
+        < cfg["volatility_high_percentile"]
+        < cfg["volatility_extreme_percentile"]
+    )
 
 
 def test_missing_config_raises():

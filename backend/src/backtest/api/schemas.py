@@ -116,7 +116,8 @@ class BacktestSignalOut(BaseModel):
     outcome: str = Field(
         description="What the engine did with it, from the same closed vocabulary the "
         "live decision trail uses: 'opened' (became a trade), 'htf_veto' (higher-timeframe "
-        "trend opposed it), 'volatility_guard', 'max_positions', 'risk_sizing', "
+        "trend opposed it), 'volatility_guard' (older reports only), 'max_positions', "
+        "'risk_sizing', "
         "'spread_veto', 'rr_gate', 'broker_rejected' (the broker refused the order — e.g. "
         "stops closer than the symbol's stops_level), 'daily_loss_breaker', or 'skipped'. "
         "Reports written before backtests recorded structured decisions instead collapse "

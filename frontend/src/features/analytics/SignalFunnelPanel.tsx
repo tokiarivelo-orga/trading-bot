@@ -5,8 +5,8 @@ import type { BotFunnel, FunnelDrop } from "@/shared/api/client";
 import { SIGNAL_OUTCOME_META } from "@/features/backtest/signalOutcome";
 
 /** The funnel stages, in the order the engine actually evaluates its gates:
- * HTF confirmation and the pre-trade risk gate, then the volatility guard /
- * open-position cap / lot sizing, then the broker's spread cap and
+ * HTF confirmation and the pre-trade risk gate, then the open-position cap /
+ * lot sizing, then the broker's spread cap and
  * spread-adjusted risk-reward floor, then the fill. */
 const STAGES = [
   {
@@ -22,7 +22,7 @@ const STAGES = [
   {
     key: "sized_ok" as const,
     label: "Sized OK",
-    hint: "Cleared the volatility guard and position cap, and produced a tradable lot size",
+    hint: "Cleared the position cap and produced a tradable lot size",
   },
   {
     key: "passed_spread" as const,

@@ -71,11 +71,19 @@ async def api(repository):
 def _m5_snapshot() -> tuple[CandleSnapshot, ...]:
     return (
         CandleSnapshot(
-            time=utc(2026, 7, 10, 13, 55), open=2398.0, high=2401.0, low=2397.5, close=2400.35,
+            time=utc(2026, 7, 10, 13, 55),
+            open=2398.0,
+            high=2401.0,
+            low=2397.5,
+            close=2400.35,
             tick_volume=120,
         ),
         CandleSnapshot(
-            time=utc(2026, 7, 10, 14, 0), open=2400.35, high=2402.0, low=2399.8, close=2401.5,
+            time=utc(2026, 7, 10, 14, 0),
+            open=2400.35,
+            high=2402.0,
+            low=2399.8,
+            close=2401.5,
             tick_volume=95,
         ),
     )
@@ -84,7 +92,11 @@ def _m5_snapshot() -> tuple[CandleSnapshot, ...]:
 def _h1_snapshot() -> tuple[CandleSnapshot, ...]:
     return (
         CandleSnapshot(
-            time=utc(2026, 7, 10, 13, 0), open=2390.0, high=2405.0, low=2388.0, close=2400.35,
+            time=utc(2026, 7, 10, 13, 0),
+            open=2390.0,
+            high=2405.0,
+            low=2388.0,
+            close=2400.35,
             tick_volume=4200,
         ),
     )

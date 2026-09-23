@@ -39,7 +39,8 @@ class DecisionCheck:
 
     name: str
     """Gate id, e.g. "htf_confirm", "spread_points", "risk_reward",
-    "volatility_percentile", "open_positions", "position_volume"."""
+    "open_positions", "position_volume" ("volatility_percentile" appears on
+    historical rows only)."""
     value: float
     threshold: float
     comparison: str
@@ -50,7 +51,9 @@ class DecisionCheck:
 # engine evaluates the gates. Phase 2 split the old collapsed `risk_rejected`
 # bucket into named reasons; `risk_rejected` itself stays in the vocabulary as
 # the catch-all for a pre-trade risk block that isn't one of the named ones
-# (and so historical rows keep rendering).
+# (and so historical rows keep rendering). `volatility_guard` is the same kind
+# of legacy value: the engine's volatility guard was removed and nothing emits
+# it any more, but rows recorded while it existed still carry it.
 SIGNAL_OUTCOMES: tuple[str, ...] = (
     "skipped",
     "daily_loss_breaker",

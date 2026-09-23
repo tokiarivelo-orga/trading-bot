@@ -60,7 +60,7 @@ def test_observe_gateway_rtt_labels_method_and_path():
     observe_gateway_rtt(account_id="acct-gw", method="GET", path="/candles", seconds=0.05)
     text = _scrape()
     assert (
-        'tradingbot_gateway_request_duration_seconds_count'
+        "tradingbot_gateway_request_duration_seconds_count"
         '{account_id="acct-gw",method="GET",path="/candles"} 1.0' in text
     )
 

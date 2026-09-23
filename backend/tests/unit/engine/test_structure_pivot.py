@@ -38,9 +38,7 @@ def test_detects_alternating_hl_hh_in_a_clean_uptrend_zigzag() -> None:
     skipped (documented in `detect_swing_pivots`)."""
     lows = [10, 9, 8, 9, 8.5, 9.5, 9, 10, 9.5, 11, 10.5, 12]
     highs = [10.5, 9.5, 8.5, 9.5, 9, 10, 9.5, 10.5, 10, 11.5, 11, 12.5]
-    pivots = detect_swing_pivots(
-        np.array(highs), np.array(lows), _times(len(lows)), pivot_bars=1
-    )
+    pivots = detect_swing_pivots(np.array(highs), np.array(lows), _times(len(lows)), pivot_bars=1)
     labels = [(p.index, p.label, p.price) for p in pivots]
     assert labels == [
         (4, StructureLabel.HL, 8.5),
@@ -58,9 +56,7 @@ def test_detects_alternating_lh_ll_in_a_clean_downtrend_zigzag() -> None:
     LL, each swing high lower than the last is LH."""
     highs = [10, 9, 8, 9, 8.5, 7.5, 8, 7, 7.5, 6, 6.5, 5]
     lows = [9.5, 8.5, 7.5, 8.5, 8, 7, 7.5, 6.5, 7, 5.5, 6, 4.5]
-    pivots = detect_swing_pivots(
-        np.array(highs), np.array(lows), _times(len(lows)), pivot_bars=1
-    )
+    pivots = detect_swing_pivots(np.array(highs), np.array(lows), _times(len(lows)), pivot_bars=1)
     labels = [(p.index, p.label, p.price) for p in pivots]
     # The first swing low (index 2) and first swing high (index 3) each have
     # no predecessor of their own kind yet, so both are left unlabeled and

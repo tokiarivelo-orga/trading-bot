@@ -22,7 +22,7 @@ from src.engine.domain.regime import (
     latest_trend_regime,
     session_for,
 )
-from src.engine.domain.volatility import VolatilityConfig, VolatilityRegime
+from src.engine.domain.volatility import VolatilityRegime
 
 
 def _trending_up_candles(n: int, *, step: float = 1.0, rng: float = 0.5):
@@ -170,7 +170,7 @@ def test_asian_session_wraps_past_midnight():
 
 def test_compute_entry_regime_returns_none_for_missing_or_empty_frame():
     now = _at(13)
-    kwargs = dict(now=now, volatility_config=VolatilityConfig(), regime_config=RegimeConfig())
+    kwargs = dict(now=now, regime_config=RegimeConfig())
 
     assert compute_entry_regime(None, **kwargs) is None
     assert compute_entry_regime(pd.DataFrame(columns=["high", "low", "close"]), **kwargs) is None
@@ -181,9 +181,7 @@ def test_compute_entry_regime_combines_volatility_trend_and_session():
     frame = pd.DataFrame({"high": highs, "low": lows, "close": closes})
     now = _at(13)  # OVERLAP under the default config
 
-    regime = compute_entry_regime(
-        frame, now=now, volatility_config=VolatilityConfig(), regime_config=RegimeConfig()
-    )
+    regime = compute_entry_regime(frame, now=now, regime_config=RegimeConfig())
 
     assert regime is not None
     assert regime.trend == TrendRegime.TRENDING

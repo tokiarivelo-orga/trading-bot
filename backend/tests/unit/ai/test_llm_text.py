@@ -52,7 +52,7 @@ def test_extract_python_code_fenced_with_surrounding_commentary():
 
 
 def test_strip_fences_no_fence_returns_trimmed_text():
-    assert strip_fences("  {\"a\": 1}  \n") == '{"a": 1}'
+    assert strip_fences('  {"a": 1}  \n') == '{"a": 1}'
 
 
 def test_strip_fences_json_fence():

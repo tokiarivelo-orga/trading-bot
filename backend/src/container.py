@@ -78,7 +78,6 @@ from src.engine.application.trade_loop import TradeEngine
 from src.engine.domain.exit_policy import ExitPolicySettings
 from src.engine.domain.models import RiskCaps
 from src.engine.domain.regime import RegimeConfig
-from src.engine.domain.volatility import VolatilityConfig
 from src.indicators.adapters.repository import IndicatorRepository
 from src.indicators.application.service import IndicatorService
 from src.journal.adapters.market_context import CandleRepositoryMarketContext
@@ -113,7 +112,6 @@ from src.shared.config.loaders import (
     load_regime_config,
     load_risk_caps,
     load_symbol_trading_config,
-    load_volatility_config,
 )
 from src.shared.config.settings import REPO_ROOT, Settings, load_yaml_config
 from src.shared.db.base import make_session_factory
@@ -521,7 +519,6 @@ def build_container(settings: Settings | None = None) -> Container:
     )
 
     global_risk_caps = load_risk_caps(settings.configs_dir)
-    volatility_config = load_volatility_config(settings.configs_dir)
     exit_policy_settings = load_exit_policy_settings(settings.configs_dir)
     regime_config = load_regime_config(settings.configs_dir)
     account_risk_caps = {
@@ -667,7 +664,6 @@ def build_container(settings: Settings | None = None) -> Container:
             strategy_version_repository=strategy_version_repository,
             baseline_strategies=baseline_strategies,
             risk_caps=account_risk_caps[account_cfg.id],
-            volatility_config=volatility_config,
             exit_policy_settings=exit_policy_settings,
             magic_to_strategy=magic_to_strategy,
             regime_config=regime_config,
@@ -752,7 +748,6 @@ def build_account_runtime(
     strategy_version_repository: StrategyVersionRepository,
     baseline_strategies: list[tuple[str, Strategy]],
     risk_caps: RiskCaps,
-    volatility_config: VolatilityConfig,
     exit_policy_settings: ExitPolicySettings,
     magic_to_strategy: Mapping[int, str],
     regime_config: RegimeConfig,
@@ -901,7 +896,6 @@ def build_account_runtime(
         market_data=market_data,
         reconciliation=reconciliation,
         risk_manager=risk_manager,
-        volatility_config=volatility_config,
         exit_policy_settings=exit_policy_settings,
         magic_to_strategy=magic_to_strategy,
     )
@@ -952,7 +946,6 @@ def build_account_runtime(
         skill_selector=skill_selector,
         strategy_source=strategy_registry,
         entry_timeframe=engine_config.get("entry_timeframe", "M5"),
-        volatility_config=volatility_config,
         regime_config=regime_config,
         signal_decisions=signal_decisions,
         order_book_capture=order_book_capture,

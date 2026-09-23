@@ -28,9 +28,7 @@ def utc(*args) -> datetime:
     return datetime(*args, tzinfo=UTC)
 
 
-def make_bars(
-    n: int, *, symbol: str, timeframe: Timeframe, start: datetime
-) -> list[Candle]:
+def make_bars(n: int, *, symbol: str, timeframe: Timeframe, start: datetime) -> list[Candle]:
     return [
         Candle(
             symbol=symbol,

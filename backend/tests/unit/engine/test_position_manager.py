@@ -2,6 +2,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
+import pytest
 
 from src.broker.domain.trading import (
     ExecutionResult,
@@ -14,11 +15,7 @@ from src.broker.domain.trading import (
 from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.domain.models import RiskCaps
-from src.engine.domain.volatility import (
-    VolatilityConfig,
-    VolatilityRegime,
-    latest_volatility_regime,
-)
+from src.engine.domain.volatility import VolatilityRegime, latest_volatility_regime
 from src.engine.domain.zone_detection import Base, BaseKind
 from src.market_data.domain.models import Candle, SymbolInfo, Timeframe
 from src.strategies.domain.models import ExitActionKind, ExitDecision
@@ -242,12 +239,7 @@ def _supply_base_candles() -> list[Candle]:
     return bars
 
 
-# ---- volatility guard (bot-agnostic, engine-level) --------------------------
-
-# Small atr_period/regime_lookback_bars so a short, hand-built candle series
-# (rather than hundreds of bars of real market data) is enough to exercise a
-# specific regime deterministically.
-VOLATILITY_CFG = VolatilityConfig(atr_period=3, regime_lookback_bars=10)
+# ---- volatile-market fixtures -------------------------------------------------
 
 
 def _volatility_ramp_candles(count: int, *, last_frac: float | None = None) -> list[Candle]:
@@ -270,11 +262,9 @@ def _volatility_ramp_candles(count: int, *, last_frac: float | None = None) -> l
     return candles
 
 
-def _regime_and_atr(candles: list[Candle], cfg: VolatilityConfig = VOLATILITY_CFG):
-    """Computes `latest_volatility_regime` off `candles` the same way
-    `PositionManager._detect_bases` does, so tests can assert against the
-    exact regime/ATR the production code will see for a given fixture
-    instead of hand-deriving (and risking a mismatched) expected float."""
+def _regime(candles: list[Candle]) -> VolatilityRegime:
+    """Sanity check on a fixture: which ATR-percentile regime it lands in,
+    with a small atr_period/lookback so a short hand-built series suffices."""
     highs = np.array([c.high for c in candles])
     lows = np.array([c.low for c in candles])
     closes = np.array([c.close for c in candles])
@@ -282,12 +272,9 @@ def _regime_and_atr(candles: list[Candle], cfg: VolatilityConfig = VOLATILITY_CF
         highs,
         lows,
         closes,
-        atr_period=cfg.atr_period,
-        regime_lookback_bars=cfg.regime_lookback_bars,
-        low_percentile=cfg.low_percentile,
-        high_percentile=cfg.high_percentile,
-        extreme_percentile=cfg.extreme_percentile,
-    )
+        atr_period=3,
+        regime_lookback_bars=10,
+    )[0]
 
 
 async def test_apply_strategy_action_close_closes_position():
@@ -430,11 +417,13 @@ async def test_moves_sl_to_breakeven_once_risk_is_covered():
     assert order_service.closed == []
 
 
-async def test_does_not_move_sl_before_risk_is_covered():
-    # risk = 2400-2380=20; progress = bid(2410)-2400=10 < risk
+async def test_does_not_move_sl_before_positive_profit_clears_stops_level():
+    # buffer = 0.21; stops_level_distance = 0.10; min_progress = 0.32
+    # progress = bid(2400.20) - open(2400.0) = 0.20 < min_progress
     position = _position(open_price=2400.0, sl=2380.0)
+    info = replace(INFO, bid=2400.20, ask=2400.40)
     order_service = FakeOrderService([position])
-    manager = PositionManager(order_service, FakeMarketData())
+    manager = PositionManager(order_service, FakeMarketData(info=info))
 
     await manager.on_candle_closed("XAUUSD")
 
@@ -624,7 +613,9 @@ async def test_no_secure_when_base_not_yet_cleared():
 
     await manager.on_candle_closed("XAUUSD")
 
-    assert order_service.modified == []
+    # The new positive-profit breakeven rule triggers (100.21), but because the
+    # base isn't cleared yet, the secure trailing rule doesn't push it higher.
+    assert order_service.modified == [(1, 100.21, 2420.0)]
 
 
 async def test_no_secure_without_any_base():
@@ -637,7 +628,9 @@ async def test_no_secure_without_any_base():
 
     await manager.on_candle_closed("XAUUSD")
 
-    assert order_service.modified == []
+    # The new positive-profit breakeven rule triggers (100.21), but no secure base is found
+    # to trail it any higher.
+    assert order_service.modified == [(1, 100.21, 2420.0)]
 
 
 async def test_secure_rule_never_loosens_an_already_better_sl():
@@ -691,9 +684,30 @@ async def test_structural_continuation_trailing_for_sell_side():
 def test_select_nearest_opposing_base():
     manager = PositionManager(FakeOrderService([]), FakeMarketData())
     bases = [
-        Base(BaseKind.SUPPLY, price_low=105.0, price_high=107.0, base_start=1, leg_out_end=3, broken=False),
-        Base(BaseKind.SUPPLY, price_low=110.0, price_high=112.0, base_start=5, leg_out_end=7, broken=False),
-        Base(BaseKind.DEMAND, price_low=95.0, price_high=97.0, base_start=9, leg_out_end=11, broken=False),
+        Base(
+            BaseKind.SUPPLY,
+            price_low=105.0,
+            price_high=107.0,
+            base_start=1,
+            leg_out_end=3,
+            broken=False,
+        ),
+        Base(
+            BaseKind.SUPPLY,
+            price_low=110.0,
+            price_high=112.0,
+            base_start=5,
+            leg_out_end=7,
+            broken=False,
+        ),
+        Base(
+            BaseKind.DEMAND,
+            price_low=95.0,
+            price_high=97.0,
+            base_start=9,
+            leg_out_end=11,
+            broken=False,
+        ),
     ]
 
     res_buy = manager._select_nearest_opposing_base(bases, Side.BUY, 104.0)
@@ -702,7 +716,9 @@ def test_select_nearest_opposing_base():
     res_sell = manager._select_nearest_opposing_base(bases, Side.SELL, 99.0)
     assert res_sell is not None and res_sell.price_high == 97.0
 
-    broken_supply = Base(BaseKind.SUPPLY, price_low=103.0, price_high=104.0, base_start=1, leg_out_end=3, broken=True)
+    broken_supply = Base(
+        BaseKind.SUPPLY, price_low=103.0, price_high=104.0, base_start=1, leg_out_end=3, broken=True
+    )
     assert manager._select_nearest_opposing_base([broken_supply], Side.BUY, 102.0) is None
 
 
@@ -841,136 +857,17 @@ async def test_risk_manager_none_skips_pending_order_handling():
     assert order_service.pending_cancelled == []
 
 
-# ---- volatility guard (bot-agnostic, engine-level) --------------------------
+# ---- no volatility guard ------------------------------------------------------
+# The volatility guard's exit rules (EXTREME close-if-losing, EXTREME
+# profit-lock, HIGH chandelier trail) were removed: a volatile market leaves
+# position management to the ordinary SL-tightening rules.
 
 
-async def test_extreme_regime_while_losing_closes_position_outright():
+async def test_extreme_volatility_while_losing_does_not_close_the_position():
     candles = _volatility_ramp_candles(45)
-    regime, _pct, _atr = _regime_and_atr(candles)
-    assert regime is VolatilityRegime.EXTREME  # sanity on the fixture
+    assert _regime(candles) is VolatilityRegime.EXTREME  # sanity on the fixture
 
-    # risk = 10; bid(2395) - open(2400) = -5 <= 0 -> losing.
-    position = _position(open_price=2400.0, sl=2390.0)
-    info = replace(INFO, bid=2395.0, ask=2395.2)
-    order_service = FakeOrderService([position])
-    manager = PositionManager(
-        order_service,
-        FakeMarketData(info=info, candles=candles),
-        volatility_config=VOLATILITY_CFG,
-    )
-
-    await manager.on_candle_closed("XAUUSD")
-
-    assert order_service.closed == [1]
-    assert order_service.modified == []
-
-
-async def test_extreme_regime_while_winning_locks_in_profit_fraction():
-    candles = _volatility_ramp_candles(45)
-    regime, _pct, _atr = _regime_and_atr(candles)
-    assert regime is VolatilityRegime.EXTREME  # sanity on the fixture
-
-    # risk = 10; progress = bid(2408) - open(2400) = 8 < risk -> plain +1R
-    # breakeven does not trigger, so the profit-lock candidate wins outright:
-    # 2400 + 8 * extreme_profit_lock_r_mult(0.5) = 2404.0.
-    position = _position(open_price=2400.0, sl=2390.0)
-    info = replace(INFO, bid=2408.0, ask=2408.2)
-    order_service = FakeOrderService([position])
-    manager = PositionManager(
-        order_service,
-        FakeMarketData(info=info, candles=candles),
-        volatility_config=VOLATILITY_CFG,
-    )
-
-    await manager.on_candle_closed("XAUUSD")
-
-    assert order_service.modified == [(1, 2404.0, 2420.0)]
-    assert order_service.closed == []
-
-
-async def test_high_regime_running_profit_applies_chandelier_trailing_stop():
-    candles = _volatility_ramp_candles(45, last_frac=0.85)
-    regime, _pct, atr_value = _regime_and_atr(candles)
-    assert regime is VolatilityRegime.HIGH  # sanity on the fixture
-
-    # risk = 10; progress = bid(2415) - open(2400) = 15 >=
-    # chandelier_min_profit_r(1.0) * risk -> chandelier rule is eligible, and
-    # (favorable=2415) - chandelier_atr_mult(2.0)*atr_value beats the plain
-    # +1R breakeven candidate (2400.0).
-    position = _position(open_price=2400.0, sl=2390.0)
-    info = replace(INFO, bid=2415.0, ask=2415.2)
-    order_service = FakeOrderService([position])
-    market_data = FakeMarketData(info=info, candles=candles)
-    manager = PositionManager(order_service, market_data, volatility_config=VOLATILITY_CFG)
-
-    await manager.on_candle_closed("XAUUSD")
-
-    expected_sl = 2415.0 - VOLATILITY_CFG.chandelier_atr_mult * atr_value
-    assert order_service.modified == [(1, expected_sl, 2420.0)]
-
-    # Simulate the SL having actually been tightened to expected_sl, then
-    # price pulls back but stays above the trailed level -- the chandelier
-    # rule must not loosen it back, and no further modify_position call
-    # should happen at all.
-    order_service._positions = [replace(position, sl=expected_sl)]
-    market_data.info = replace(INFO, bid=2410.0, ask=2410.2)
-
-    await manager.on_candle_closed("XAUUSD")
-
-    assert order_service.modified == [(1, expected_sl, 2420.0)]
-
-
-async def test_disabled_volatility_guard_skips_extreme_and_high_rules():
-    # Same EXTREME-losing fixture as
-    # test_extreme_regime_while_losing_closes_position_outright, but with the
-    # live guard switched off -- volatility_config is still supplied, yet
-    # _detect_bases must no longer classify a regime at all, so _manage sees
-    # regime=None and reproduces pre-Phase-B behavior (no outright close).
-    candles = _volatility_ramp_candles(45)
-    position = _position(open_price=2400.0, sl=2390.0)
-    info = replace(INFO, bid=2395.0, ask=2395.2)
-    order_service = FakeOrderService([position])
-    manager = PositionManager(
-        order_service,
-        FakeMarketData(info=info, candles=candles),
-        volatility_config=VOLATILITY_CFG,
-    )
-    manager.set_volatility_guard_enabled(False)
-
-    await manager.on_candle_closed("XAUUSD")
-
-    assert order_service.closed == []
-    assert order_service.modified == []
-
-
-async def test_disabled_volatility_guard_skips_high_regime_chandelier_rule():
-    # Same HIGH-regime chandelier fixture as
-    # test_high_regime_running_profit_applies_chandelier_trailing_stop, but
-    # with the live guard switched off -- no chandelier trailing, and since
-    # progress(15) >= risk(10), only the plain +1R breakeven candidate
-    # (2400.21, entry + spread/stops_level buffer -- see
-    # test_moves_sl_to_breakeven_once_risk_is_covered) is available among
-    # the ordinary SL-tightening rules.
-    candles = _volatility_ramp_candles(45, last_frac=0.85)
-    position = _position(open_price=2400.0, sl=2390.0)
-    info = replace(INFO, bid=2415.0, ask=2415.2)
-    order_service = FakeOrderService([position])
-    market_data = FakeMarketData(info=info, candles=candles)
-    manager = PositionManager(order_service, market_data, volatility_config=VOLATILITY_CFG)
-    manager.set_volatility_guard_enabled(False)
-
-    await manager.on_candle_closed("XAUUSD")
-
-    assert order_service.modified == [(1, 2400.21, 2420.0)]
-
-
-async def test_volatility_config_none_disables_all_volatility_rules():
-    # Regression guard: the exact EXTREME-losing fixture from
-    # test_extreme_regime_while_losing_closes_position_outright, but with no
-    # volatility_config -- must reproduce pre-Phase-B behavior exactly (no
-    # outright close; ordinary SL-tightening rules decide, and none of them
-    # fire here since progress < risk and there are no bases).
-    candles = _volatility_ramp_candles(45)
+    # risk = 10; bid(2395) - open(2400) = -5 -> losing, no base, no breakeven.
     position = _position(open_price=2400.0, sl=2390.0)
     info = replace(INFO, bid=2395.0, ask=2395.2)
     order_service = FakeOrderService([position])
@@ -980,6 +877,44 @@ async def test_volatility_config_none_disables_all_volatility_rules():
 
     assert order_service.closed == []
     assert order_service.modified == []
+
+
+async def test_extreme_volatility_while_winning_only_applies_the_ordinary_breakeven():
+    candles = _volatility_ramp_candles(45)
+    assert _regime(candles) is VolatilityRegime.EXTREME  # sanity on the fixture
+
+    # progress = 8: the old guard would have locked 2404.0; now only the
+    # ordinary spread-clearing breakeven (entry + buffer) applies.
+    position = _position(open_price=2400.0, sl=2390.0)
+    info = replace(INFO, bid=2408.0, ask=2408.2)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData(info=info, candles=candles))
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert order_service.modified == [(1, 2400.21, 2420.0)]
+    assert order_service.closed == []
+
+
+async def test_high_volatility_running_profit_gets_no_chandelier_trail():
+    candles = _volatility_ramp_candles(45, last_frac=0.85)
+    assert _regime(candles) is VolatilityRegime.HIGH  # sanity on the fixture
+
+    # progress(15) >= risk(10): only the plain breakeven candidate (2400.21,
+    # see test_moves_sl_to_breakeven_once_risk_is_covered) is available.
+    position = _position(open_price=2400.0, sl=2390.0)
+    info = replace(INFO, bid=2415.0, ask=2415.2)
+    order_service = FakeOrderService([position])
+    manager = PositionManager(order_service, FakeMarketData(info=info, candles=candles))
+
+    await manager.on_candle_closed("XAUUSD")
+
+    assert order_service.modified == [(1, 2400.21, 2420.0)]
+
+
+def test_position_manager_no_longer_accepts_a_volatility_config():
+    with pytest.raises(TypeError):
+        PositionManager(FakeOrderService([]), FakeMarketData(), volatility_config=object())
 
 
 async def test_order_rejected_from_sl_modify_is_caught_and_logged(caplog):

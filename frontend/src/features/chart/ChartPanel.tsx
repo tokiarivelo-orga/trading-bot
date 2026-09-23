@@ -64,7 +64,6 @@ import { useCandleGaps } from './useCandleGaps';
 import { fetchShared } from './sharedFetchCache';
 import { useChartEngine } from './useChartEngine';
 import { useChartUIToggles } from './useChartUIToggles';
-import { useVolatilityGuard } from '@/features/settings/useVolatilityGuard';
 import { useDrawingTools } from './useDrawingTools';
 import { useIndicators } from './useIndicators';
 import { useOrderPopovers } from './useOrderPopovers';
@@ -275,10 +274,6 @@ export function ChartPanel({
     showDrawingToolbar,
     toggleDrawingToolbar,
   } = useChartUIToggles();
-  // Shared with `features/settings/VolatilityGuardPanel.tsx` via the same
-  // TanStack Query cache entry — toggling here or there stays in sync with
-  // no prop drilling beyond this panel.
-  const volatilityGuard = useVolatilityGuard();
   // Replay ("live session player", §F): progressively reveals the backtest
   // report's candles/indicators/trades/log up to a moving cursor instead of
   // drawing everything at once — see `visibleCandles()` below. `replayActive`
@@ -2053,11 +2048,6 @@ export function ChartPanel({
     pendingAnchorCount: drawingTools.pendingAnchorCount,
     spreadPoints: chartRenderController.spreadPoints,
     windowCount: windowCount,
-    volatilityGuardEnabled: volatilityGuard.config?.enabled ?? null,
-    volatilityGuardSaving: volatilityGuard.isSaving,
-    onToggleVolatilityGuard: () => {
-      if (volatilityGuard.config) volatilityGuard.setEnabled(!volatilityGuard.config.enabled);
-    },
   };
 
   const onToolbarStateChangeRef = useRef(onToolbarStateChange);
@@ -2091,8 +2081,6 @@ export function ChartPanel({
     drawingTools.drawingTool,
     drawingTools.pendingAnchorCount,
     chartRenderController.spreadPoints,
-    volatilityGuard.config?.enabled,
-    volatilityGuard.isSaving,
     candleGaps.gaps.length,
     candleGaps.missingBars,
     candleGaps.repairing,

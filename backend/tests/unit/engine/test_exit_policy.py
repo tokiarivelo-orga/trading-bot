@@ -200,8 +200,10 @@ def test_peak_r_floors_at_flat() -> None:
 # Per-bot resolution
 # ─────────────────────────────────────────────────────────────────
 
+
 def _settings(**per_strategy):
     from src.engine.domain.exit_policy import ExitPolicySettings
+
     return ExitPolicySettings(
         default=ExitPolicyConfig(enabled=True, arm_r=0.3),
         per_strategy=per_strategy,
@@ -225,9 +227,7 @@ def test_unknown_bot_gets_the_default_rather_than_being_exempt():
 
 
 def test_per_bot_entry_can_retune_instead_of_disabling():
-    settings = _settings(
-        cautious=ExitPolicyConfig(enabled=True, arm_r=0.8, keep_fraction=0.7)
-    )
+    settings = _settings(cautious=ExitPolicyConfig(enabled=True, arm_r=0.8, keep_fraction=0.7))
     resolved = settings.resolve("cautious")
     assert resolved is not None
     assert (resolved.arm_r, resolved.keep_fraction) == (0.8, 0.7)
@@ -235,6 +235,7 @@ def test_per_bot_entry_can_retune_instead_of_disabling():
 
 def test_disabled_default_disables_everything_not_explicitly_enabled():
     from src.engine.domain.exit_policy import ExitPolicySettings
+
     settings = ExitPolicySettings(
         default=ExitPolicyConfig(enabled=False),
         per_strategy={"opt_in": ExitPolicyConfig(enabled=True)},
@@ -247,6 +248,7 @@ def test_disabled_default_disables_everything_not_explicitly_enabled():
 # Fixed profit target
 # ─────────────────────────────────────────────────────────────────
 
+
 def _fixed(target=0.3, **kw):
     return ExitPolicyConfig(enabled=True, fixed_target_r=target, **kw)
 
@@ -256,8 +258,13 @@ def test_fixed_target_is_off_by_default():
     per bot rather than applied fleet-wide."""
     assert ExitPolicyConfig().fixed_target_r is None
     decision = decide_exit(
-        is_buy=True, entry_price=100.0, current_sl=99.0, mark=100.05,
-        extreme_favorable=100.05, risk=1.0, take_profit=103.0,
+        is_buy=True,
+        entry_price=100.0,
+        current_sl=99.0,
+        mark=100.05,
+        extreme_favorable=100.05,
+        risk=1.0,
+        take_profit=103.0,
         config=ExitPolicyConfig(enabled=True),
     )
     assert decision.action is not ExitAction.REDUCE_TP
@@ -265,8 +272,13 @@ def test_fixed_target_is_off_by_default():
 
 def test_fixed_target_pulls_the_take_profit_to_the_configured_r():
     decision = decide_exit(
-        is_buy=True, entry_price=100.0, current_sl=99.0, mark=100.02,
-        extreme_favorable=100.02, risk=1.0, take_profit=103.0,
+        is_buy=True,
+        entry_price=100.0,
+        current_sl=99.0,
+        mark=100.02,
+        extreme_favorable=100.02,
+        risk=1.0,
+        take_profit=103.0,
         config=_fixed(0.3),
     )
     assert decision.action is ExitAction.REDUCE_TP
@@ -275,8 +287,13 @@ def test_fixed_target_pulls_the_take_profit_to_the_configured_r():
 
 def test_fixed_target_mirrors_for_a_sell():
     decision = decide_exit(
-        is_buy=False, entry_price=100.0, current_sl=101.0, mark=99.98,
-        extreme_favorable=99.98, risk=1.0, take_profit=97.0,
+        is_buy=False,
+        entry_price=100.0,
+        current_sl=101.0,
+        mark=99.98,
+        extreme_favorable=99.98,
+        risk=1.0,
+        take_profit=97.0,
         config=_fixed(0.3),
     )
     assert decision.action is ExitAction.REDUCE_TP
@@ -287,15 +304,25 @@ def test_fixed_target_never_pushes_a_take_profit_further_out():
     """A TP already tighter than the target must be left alone — this rule
     only ever pulls in, like every other rule in this module."""
     decision = decide_exit(
-        is_buy=True, entry_price=100.0, current_sl=99.0, mark=100.02,
-        extreme_favorable=100.02, risk=1.0, take_profit=100.1,  # 0.1R, tighter
+        is_buy=True,
+        entry_price=100.0,
+        current_sl=99.0,
+        mark=100.02,
+        extreme_favorable=100.02,
+        risk=1.0,
+        take_profit=100.1,  # 0.1R, tighter
         config=_fixed(0.3),
     )
     assert decision.action is not ExitAction.REDUCE_TP
 
     sell = decide_exit(
-        is_buy=False, entry_price=100.0, current_sl=101.0, mark=99.98,
-        extreme_favorable=99.98, risk=1.0, take_profit=99.9,  # 0.1R, tighter
+        is_buy=False,
+        entry_price=100.0,
+        current_sl=101.0,
+        mark=99.98,
+        extreme_favorable=99.98,
+        risk=1.0,
+        take_profit=99.9,  # 0.1R, tighter
         config=_fixed(0.3),
     )
     assert sell.action is not ExitAction.REDUCE_TP
@@ -303,8 +330,13 @@ def test_fixed_target_never_pushes_a_take_profit_further_out():
 
 def test_fixed_target_applies_when_no_take_profit_is_set():
     decision = decide_exit(
-        is_buy=True, entry_price=100.0, current_sl=99.0, mark=100.0,
-        extreme_favorable=100.0, risk=1.0, take_profit=None,
+        is_buy=True,
+        entry_price=100.0,
+        current_sl=99.0,
+        mark=100.0,
+        extreme_favorable=100.0,
+        risk=1.0,
+        take_profit=None,
         config=_fixed(0.5),
     )
     assert decision.action is ExitAction.REDUCE_TP
@@ -313,8 +345,13 @@ def test_fixed_target_applies_when_no_take_profit_is_set():
 
 def test_fixed_target_is_ignored_when_the_policy_is_disabled():
     decision = decide_exit(
-        is_buy=True, entry_price=100.0, current_sl=99.0, mark=100.02,
-        extreme_favorable=100.02, risk=1.0, take_profit=103.0,
+        is_buy=True,
+        entry_price=100.0,
+        current_sl=99.0,
+        mark=100.02,
+        extreme_favorable=100.02,
+        risk=1.0,
+        take_profit=103.0,
         config=ExitPolicyConfig(enabled=False, fixed_target_r=0.3),
     )
     assert decision.action is ExitAction.NONE
@@ -322,6 +359,7 @@ def test_fixed_target_is_ignored_when_the_policy_is_disabled():
 
 def test_fixed_target_resolves_per_bot_through_settings():
     from src.engine.domain.exit_policy import ExitPolicySettings
+
     settings = ExitPolicySettings(
         default=ExitPolicyConfig(enabled=True),
         per_strategy={"scalper": _fixed(0.3)},

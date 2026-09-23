@@ -270,9 +270,7 @@ def test_detect_range_reversion_none_without_a_rejection_back_inside() -> None:
     assert setup is None
 
 
-def _build_band_rejection_frame(
-    lookback: int, band_mult: float
-) -> tuple[np.ndarray, np.ndarray]:
+def _build_band_rejection_frame(lookback: int, band_mult: float) -> tuple[np.ndarray, np.ndarray]:
     """Choppy RANGING base plus one bar that pierces the upper Bollinger
     band and closes back inside it — the exact geometry
     `_detect_range_reversion` requires for a SELL fade. Shared by the
@@ -403,11 +401,9 @@ def test_breakeven_exit_on_mode_a_position_when_regime_flips_to_ranging() -> Non
         flat_highs.append(price + 0.03)
         flat_lows.append(price - 0.03)
     flat_frame = _frame(np.array(flat_highs), np.array(flat_lows))
-    flat_frame["time"] = [
-        trend_frame["time"].iloc[-1] + (i + 1) * STEP for i in range(flat_n)
-    ]
-    full = pd.concat([trend_frame, flat_frame], ignore_index=True).iloc[-200:].reset_index(
-        drop=True
+    flat_frame["time"] = [trend_frame["time"].iloc[-1] + (i + 1) * STEP for i in range(flat_n)]
+    full = (
+        pd.concat([trend_frame, flat_frame], ignore_index=True).iloc[-200:].reset_index(drop=True)
     )
 
     own_position = PositionSnapshot(

@@ -20,14 +20,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.backtest.application.run_backtest import NoSymbolSpecError, run_backtest
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.adapters.candle_repository import CandleRepository
 from src.market_data.adapters.replay import SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
 from src.market_data.domain.models import Candle, Timeframe
 from src.shared.db.base import Base
-from src.strategies.registry import StrategyRegistry
 from src.strategies.generated.xauusd_snd_qm_structure_m5_v1 import XauusdSndQmStructureM5
+from src.strategies.registry import StrategyRegistry
 
 M5_STEP = timedelta(minutes=5)
 START = datetime(2025, 1, 1, tzinfo=UTC)
@@ -98,19 +97,7 @@ def database_url(tmp_path) -> str:
     return url
 
 
-async def test_backtest_closes_one_trade_via_tp_and_one_via_sl(database_url, monkeypatch):
-    # This test's real subject is breakout_v1's TP/SL/sizing math against the
-    # real configs/risk.yaml + configs/symbols/xauusd.yaml (see the module
-    # docstring), not the volatility guard (Phase B; covered by its own unit
-    # tests in tests/unit/engine/). build_m5_candles()'s textbook "quiet
-    # range, then breakout" shape is exactly what that guard is designed to
-    # flag as a volatility spike, so it's neutralized here the same way
-    # `_minimal_configs_dir` neutralizes it below (atr_period exceeding the
-    # fixture's bar count -> "insufficient history" NORMAL fallback).
-    monkeypatch.setattr(
-        "src.backtest.application.run_backtest.load_volatility_config",
-        lambda configs_dir: VolatilityConfig(atr_period=999),
-    )
+async def test_backtest_closes_one_trade_via_tp_and_one_via_sl(database_url):
     # Frictionless fills: this test pins the *nominal* R multiples (2.2 / -1.0)
     # that breakout_v1's TP_RR and stop define. Broker-constraint simulation
     # (OBSERVABILITY_PLAN.md Phase 4, on by default) slips the entry off the
@@ -244,25 +231,23 @@ async def test_backtest_rejects_symbol_the_strategy_does_not_trade(database_url)
     strategy = XauusdSndQmStructureM5()
     registry.register(strategy.spec.name, strategy)
     with pytest.raises(ValueError, match="does not trade"):
-        await run_backtest(strategy.spec.name, "EURUSD", "2025-01:2025-01", database_url=database_url, strategy_source=registry)
+        await run_backtest(
+            strategy.spec.name,
+            "EURUSD",
+            "2025-01:2025-01",
+            database_url=database_url,
+            strategy_source=registry,
+        )
 
 
 def _minimal_configs_dir(tmp_path: Path, *, xauusd_yaml: bool) -> Path:
-    """A fixture configs/ containing only risk.yaml + app.yaml + volatility.yaml
+    """A fixture configs/ containing only risk.yaml + app.yaml + regime.yaml
     (all required unconditionally by run_backtest) and, optionally, a legacy
     symbols/xauusd.yaml — for exercising the DB-backed SymbolSpec sourcing
-    without depending on the project's real checked-in config.
-
-    volatility.yaml's atr_period (999) deliberately exceeds every fixture's
-    bar count in this file, so the volatility guard (Phase B) always takes
-    its "insufficient history" NORMAL fallback here — these tests exercise
-    symbol-spec sourcing and risk sizing, not the volatility guard (see
-    tests/unit/engine/test_trade_loop.py and test_position_manager.py for
-    that), and build_m5_candles()'s textbook "quiet range, then breakout"
-    shape is exactly what the guard is designed to flag as a volatility
-    spike."""
+    without depending on the project's real checked-in config."""
     configs_dir = tmp_path / "configs"
     (configs_dir / "symbols").mkdir(parents=True)
+    (configs_dir / "regime.yaml").write_text("adx_period: 14\n")
     (configs_dir / "risk.yaml").write_text(
         "risk_per_trade_pct: 0.5\n"
         "daily_loss_limit_pct: 2.0\n"
@@ -271,7 +256,6 @@ def _minimal_configs_dir(tmp_path: Path, *, xauusd_yaml: bool) -> Path:
         "consecutive_loss_pause: 10\n"
     )
     (configs_dir / "app.yaml").write_text('timezone: "UTC"\n')
-    (configs_dir / "volatility.yaml").write_text("atr_period: 999\n")
     if xauusd_yaml:
         (configs_dir / "symbols" / "xauusd.yaml").write_text(
             "symbol: XAUUSD\n"
@@ -311,7 +295,10 @@ async def test_backtest_uses_db_backed_symbol_spec_without_any_yaml(tmp_path, da
     )
 
     report = await run_backtest(
-        "breakout_v1", "XAUUSD", "2025-01:2025-01", database_url=database_url,
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
         configs_dir=configs_dir,
     )
 
@@ -332,15 +319,24 @@ async def test_run_backtest_min_lot_fallback_override(tmp_path, database_url):
     )
 
     report = await run_backtest(
-        "breakout_v1", "XAUUSD", "2025-01:2025-01", database_url=database_url,
-        configs_dir=configs_dir, starting_balance=50.0,
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        configs_dir=configs_dir,
+        starting_balance=50.0,
     )
     assert len(report.trades) == 0
 
     report = await run_backtest(
-        "breakout_v1", "XAUUSD", "2025-01:2025-01", database_url=database_url,
-        configs_dir=configs_dir, starting_balance=50.0,
-        min_lot_fallback_enabled=True, max_risk_per_trade_pct=25.0,
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        configs_dir=configs_dir,
+        starting_balance=50.0,
+        min_lot_fallback_enabled=True,
+        max_risk_per_trade_pct=25.0,
     )
     assert len(report.trades) == 2
     assert any("min-lot fallback" in e.message for e in report.activity_log)
@@ -351,7 +347,10 @@ async def test_backtest_raises_no_symbol_spec_without_db_row_or_yaml(tmp_path, d
 
     with pytest.raises(NoSymbolSpecError, match="XAUUSD"):
         await run_backtest(
-            "breakout_v1", "XAUUSD", "2025-01:2025-01", database_url=database_url,
+            "breakout_v1",
+            "XAUUSD",
+            "2025-01:2025-01",
+            database_url=database_url,
             configs_dir=configs_dir,
         )
 
@@ -380,7 +379,10 @@ async def test_db_symbol_spec_takes_precedence_over_legacy_yaml(tmp_path, databa
     )
 
     report = await run_backtest(
-        "breakout_v1", "XAUUSD", "2025-01:2025-01", database_url=database_url,
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
         configs_dir=configs_dir,
     )
 

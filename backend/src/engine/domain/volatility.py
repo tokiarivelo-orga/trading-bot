@@ -1,19 +1,17 @@
-"""Volatility-regime classification for engine-level SL/TP and exit adaptation.
+"""Volatility-regime classification, used only to tag signals and trades.
 
 Ranks the current ATR reading against its own trailing history (percentile
-rank) to bucket the market into a `VolatilityRegime`. A later phase (Phase B)
-uses that regime to scale SL/TP distance and drive position-management rules
-(chandelier exits, profit locking) in `RiskManager`/`PositionManager` — this
-module only classifies, it never touches trade state.
+rank) to bucket the market into a `VolatilityRegime`. `engine.domain.regime`
+attaches that bucket to every `SignalDecision`/`TradeRecord` for analytics;
+nothing gates, sizes, or exits a trade on it.
 
 No I/O — pure functions over OHLC/ATR arrays, matching this module's
-hexagonal `domain/` placement. `VolatilityConfig` mirrors
-`configs/volatility.yaml` (see `shared.config.loaders.load_volatility_config`).
+hexagonal `domain/` placement. Thresholds come from `configs/regime.yaml`
+(`volatility_*` keys, see `RegimeConfig`).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import StrEnum
 
 import numpy as np
@@ -33,30 +31,6 @@ class VolatilityRegime(StrEnum):
     NORMAL = "normal"
     HIGH = "high"
     EXTREME = "extreme"
-
-
-@dataclass(frozen=True, kw_only=True)
-class VolatilityConfig:
-    """Mirrors `configs/volatility.yaml`. Classifier fields (`atr_period`
-    through `extreme_percentile`) are consumed by this module; the
-    SL/TP-multiplier and position-management fields are read-only here — a
-    later phase wires them into `RiskManager`/`PositionManager`."""
-
-    atr_period: int = DEFAULT_ATR_PERIOD
-    regime_lookback_bars: int = DEFAULT_REGIME_LOOKBACK_BARS
-    low_percentile: float = DEFAULT_LOW_PERCENTILE
-    high_percentile: float = DEFAULT_HIGH_PERCENTILE
-    extreme_percentile: float = DEFAULT_EXTREME_PERCENTILE
-    sl_multiplier_low: float = 0.85
-    sl_multiplier_normal: float = 1.0
-    sl_multiplier_high: float = 1.3
-    tp_multiplier_low: float = 0.85
-    tp_multiplier_normal: float = 1.0
-    tp_multiplier_high: float = 1.3
-    extreme_close_if_losing: bool = True
-    extreme_profit_lock_r_mult: float = 0.5
-    chandelier_atr_mult: float = 2.0
-    chandelier_min_profit_r: float = 1.0
 
 
 def _percentile_rank(window: np.ndarray, value: float) -> float:
@@ -147,8 +121,7 @@ def latest_volatility_regime(
     high_percentile: float = DEFAULT_HIGH_PERCENTILE,
     extreme_percentile: float = DEFAULT_EXTREME_PERCENTILE,
 ) -> tuple[VolatilityRegime, float, float]:
-    """Convenience "latest regime" read for live use (`RiskManager` /
-    `PositionManager` in a later phase): classifies only the most recent bar
+    """Convenience "latest regime" read for live entry tagging: classifies only the most recent bar
     and also returns its percentile rank and raw ATR value. Returns
     `(VolatilityRegime.NORMAL, nan, nan)` when there isn't enough history yet
     instead of raising."""

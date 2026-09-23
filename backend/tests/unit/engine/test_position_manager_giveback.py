@@ -83,9 +83,7 @@ async def test_losing_position_is_left_alone() -> None:
 @pytest.mark.asyncio
 async def test_high_water_mark_is_tracked_from_the_first_candle() -> None:
     """The peak used by the give-back rule is only meaningful if it starts
-    accumulating at entry. It used to be populated exclusively inside the
-    HIGH-volatility chandelier rule, so it would have been silently absent
-    for most positions."""
+    accumulating at entry, whatever other rules are enabled."""
     orders = FakeOrderService([_position(open_price=2400.0, sl=2390.0, tp=2500.0)])
     manager = _manager(orders, POLICY)
     await manager.on_candle_closed("XAUUSD")

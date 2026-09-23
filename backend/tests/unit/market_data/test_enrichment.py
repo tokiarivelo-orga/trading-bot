@@ -28,9 +28,7 @@ def test_compute_atr_series_matches_hand_computed_values():
 
 def test_compute_atr_series_single_bar_has_no_prior_close():
     # With one bar, true range is just high - low.
-    result = compute_atr_series(
-        np.array([10.0]), np.array([9.0]), np.array([9.5]), period=1
-    )
+    result = compute_atr_series(np.array([10.0]), np.array([9.0]), np.array([9.5]), period=1)
     np.testing.assert_allclose(result, [1.0])
 
 

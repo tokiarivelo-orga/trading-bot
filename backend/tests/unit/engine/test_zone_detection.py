@@ -116,4 +116,3 @@ def test_detects_multibar_range_base_with_internal_bounce():
     assert base.price_low == 103.5
     assert base.price_high == 105.1
     assert base.broken is False
-

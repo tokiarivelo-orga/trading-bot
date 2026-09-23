@@ -41,7 +41,6 @@ from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.application.trade_loop import TradeEngine
 from src.engine.domain.models import RiskCaps
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.adapters.mt5_gateway import GatewayMarketData
 from src.shared.db.base import Base
 from src.shared.events.bus import EventBus
@@ -186,9 +185,7 @@ def wired(tmp_path):
     account = AccountService(gateway=_FakeAccountGateway(), store=_NullStore())
 
     risk_manager = RiskManager(caps=RISK_CAPS, timezone="UTC")
-    position_manager = PositionManager(
-        order_service, market_data, volatility_config=VolatilityConfig(atr_period=30)
-    )
+    position_manager = PositionManager(order_service, market_data)
     strategy_registry = StrategyRegistry()
     strategy_registry.register("breakout_v1", BreakoutV1())
     skill_selector = SkillSelector(
@@ -213,7 +210,6 @@ def wired(tmp_path):
         skill_selector=skill_selector,
         strategy_source=strategy_registry,
         entry_timeframe="M5",
-        volatility_config=VolatilityConfig(atr_period=30),
         context_bars=30,
     )
     event_bus.subscribe(CandleClosed, trade_engine.on_candle_closed)
@@ -249,9 +245,7 @@ async def test_signal_id_joins_the_signal_and_fill_log_lines(wired):
     try:
         await trade_engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-        signal_rows = _drain(
-            activity_repository, logger_contains="trade_loop", q="SIGNAL: XAUUSD"
-        )
+        signal_rows = _drain(activity_repository, logger_contains="trade_loop", q="SIGNAL: XAUUSD")
         fill_rows = _drain(activity_repository, logger_contains="order_service", q="ENTRY OPENED")
     finally:
         listener.stop()

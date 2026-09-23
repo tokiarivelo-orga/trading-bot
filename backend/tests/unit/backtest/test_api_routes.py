@@ -357,9 +357,7 @@ async def test_delete_report_rejects_path_traversal(api):
 
 async def test_import_report_round_trips_a_downloaded_report(api):
     client, reports_dir = api
-    zone = BacktestZone(
-        kind="demand", price_low=99.7, price_high=100.3, time_start=T0, time_end=T1
-    )
+    zone = BacktestZone(kind="demand", price_low=99.7, price_high=100.3, time_start=T0, time_end=T1)
     trade = dataclasses.replace(
         make_report().trades[0],
         zone=zone,

@@ -54,9 +54,7 @@ async def test_export_json_is_empty_list_when_nothing_captured(repository):
 
 async def test_export_csv_is_header_only_when_nothing_captured(repository):
     async with _api(repository) as client:
-        response = await client.get(
-            "/accounts/default/order-book/export", params={"format": "csv"}
-        )
+        response = await client.get("/accounts/default/order-book/export", params={"format": "csv"})
     assert response.status_code == 200
     rows = list(csv.reader(io.StringIO(response.text)))
     assert rows == [
@@ -106,9 +104,7 @@ async def test_export_csv_flattens_one_row_per_level(repository):
     )
 
     async with _api(repository) as client:
-        response = await client.get(
-            "/accounts/default/order-book/export", params={"format": "csv"}
-        )
+        response = await client.get("/accounts/default/order-book/export", params={"format": "csv"})
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/csv")

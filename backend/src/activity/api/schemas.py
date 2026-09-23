@@ -77,8 +77,8 @@ class DecisionCheckOut(BaseModel):
     identically in the UI."""
 
     name: str = Field(
-        description="Gate id: 'htf_confirm', 'volatility_percentile', 'open_positions', "
-        "'position_volume', 'spread_points', or 'risk_reward'."
+        description="Gate id: 'htf_confirm', 'open_positions', 'position_volume', "
+        "'spread_points', or 'risk_reward' ('volatility_percentile' on historical rows only)."
     )
     value: float = Field(
         description="What the gate measured, e.g. the live spread in points. Boolean gates "
@@ -100,7 +100,7 @@ class FunnelDropOut(BaseModel):
     )
     outcome: str = Field(
         description="The decision outcome that stopped them, e.g. 'htf_veto', "
-        "'volatility_guard', 'max_positions', 'risk_sizing', 'spread_veto', 'rr_gate', "
+        "'max_positions', 'risk_sizing', 'spread_veto', 'rr_gate', "
         "'broker_rejected', 'daily_loss_breaker', 'risk_rejected', 'skipped'."
     )
     count: int = Field(description="How many of this bot's signals dropped out this way.")
@@ -113,7 +113,7 @@ class FunnelDropOut(BaseModel):
 class BotFunnelOut(BaseModel):
     """One bot's signal→fill funnel over the queried period. The counts are
     monotonically non-increasing and follow the engine's real gate order:
-    HTF confirmation, then volatility guard / position cap / lot sizing, then
+    HTF confirmation, then position cap / lot sizing, then
     the broker's spread + risk-reward gate, then the fill."""
 
     bot: str = Field(description="Full bot id, e.g. 'normal/xauusd/breakout_v1'.")
@@ -126,8 +126,8 @@ class BotFunnelOut(BaseModel):
         "pre-trade risk gate."
     )
     sized_ok: int = Field(
-        description="Of those, how many cleared the volatility guard and open-position cap "
-        "and produced a tradable lot size."
+        description="Of those, how many cleared the open-position cap and produced a "
+        "tradable lot size."
     )
     passed_spread: int = Field(
         description="Of those, how many cleared the broker spread cap and the "
@@ -150,7 +150,8 @@ class BotSignalOut(BaseModel):
     direction: str = Field(description="'buy' or 'sell'.")
     outcome: str = Field(
         description="What the engine did with it: 'opened' (became a trade), 'htf_veto' "
-        "(higher-timeframe trend opposed it), 'volatility_guard' (ATR regime was EXTREME), "
+        "(higher-timeframe trend opposed it), 'volatility_guard' (historical rows only: the "
+        "removed EXTREME-ATR entry block), "
         "'max_positions' (open-position cap), 'risk_sizing' (no tradable lot size), "
         "'spread_veto' (live spread over the cap), 'rr_gate' (spread-adjusted risk-reward "
         "floor), 'daily_loss_breaker' (a circuit breaker had the engine paused), "

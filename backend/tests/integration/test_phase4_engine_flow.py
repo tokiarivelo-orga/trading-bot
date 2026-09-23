@@ -28,7 +28,6 @@ from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.application.trade_loop import TradeEngine
 from src.engine.domain.models import RiskCaps
-from src.engine.domain.volatility import VolatilityConfig
 from src.journal.adapters.market_context import CandleRepositoryMarketContext
 from src.journal.adapters.repository import JournalRepository
 from src.journal.api.routes import router as journal_router
@@ -223,9 +222,7 @@ class ContainerForTest:
 
         risk_manager = RiskManager(caps=RISK_CAPS, timezone="UTC")
         self.risk_manager = risk_manager
-        position_manager = PositionManager(
-            self.order_service, self.market_data, volatility_config=VolatilityConfig(atr_period=30)
-        )
+        position_manager = PositionManager(self.order_service, self.market_data)
         self.position_manager = position_manager
         strategy_registry = StrategyRegistry()
         strategy_registry.register("breakout_v1", BreakoutV1())
@@ -258,15 +255,6 @@ class ContainerForTest:
             skill_selector=skill_selector,
             strategy_source=strategy_registry,
             entry_timeframe="M5",
-            # atr_period=30 exceeds the M5 fixture's 21 bars (see
-            # make_fake_gateway's docstring) so `latest_volatility_regime`
-            # takes its "insufficient history" NORMAL fallback here, the same
-            # way `mtf_confirm` already no-ops on the other, shorter
-            # timeframes — this suite isn't exercising the volatility guard
-            # (see tests/unit/engine/test_trade_loop.py for that), and a
-            # 21-bar flat-range-then-breakout fixture is naturally read as an
-            # EXTREME volatility spike, which would block every entry here.
-            volatility_config=VolatilityConfig(atr_period=30),
             context_bars=30,
         )
         self.event_bus.subscribe(CandleClosed, self.trade_engine.on_candle_closed)
@@ -461,38 +449,16 @@ async def test_update_core_risk_caps_partial_update_takes_effect_live(api):
     assert loosened.json()["max_open_positions"] == 50
 
 
-async def test_get_volatility_config_reflects_configured_values(api):
-    body = (await api.get("/accounts/default/engine/volatility-config")).json()
-    assert body["atr_period"] == 30
-    assert body["enabled"] is True
-
-
-async def test_update_volatility_guard_enabled_takes_effect_live_on_both_components(api):
+async def test_volatility_guard_endpoints_are_gone(api):
+    # The volatility guard was removed entirely — no config to read, no
+    # switch to flip.
+    assert (await api.get("/accounts/default/engine/volatility-config")).status_code == 404
     updated = await api.put(
-        "/accounts/default/engine/volatility-config/enabled",
-        json={"enabled": False},
+        "/accounts/default/engine/volatility-config/enabled", json={"enabled": False}
     )
-    assert updated.status_code == 200
-    body = updated.json()
-    assert body["enabled"] is False
-    # Every other field is untouched by the live update.
-    assert body["atr_period"] == 30
-
-    # The running TradeEngine and PositionManager (not just the API's echo)
-    # both actually changed.
-    assert api.container.trade_engine.volatility_guard_enabled is False
-    assert api.container.position_manager._volatility_guard_enabled is False
-
-    again = (await api.get("/accounts/default/engine/volatility-config")).json()
-    assert again["enabled"] is False
-
-    re_enabled = await api.put(
-        "/accounts/default/engine/volatility-config/enabled",
-        json={"enabled": True},
-    )
-    assert re_enabled.json()["enabled"] is True
-    assert api.container.trade_engine.volatility_guard_enabled is True
-    assert api.container.position_manager._volatility_guard_enabled is True
+    assert updated.status_code in (404, 405)
+    assert not hasattr(api.container.trade_engine, "set_volatility_guard_enabled")
+    assert not hasattr(api.container.position_manager, "set_volatility_guard_enabled")
 
 
 async def test_engine_does_not_reenter_once_max_open_positions_reached(api):

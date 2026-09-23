@@ -52,7 +52,6 @@ from src.engine.application.position_manager import PositionManager
 from src.engine.application.risk_manager import RiskManager
 from src.engine.application.trade_loop import TradeEngine
 from src.engine.domain.models import RiskCaps
-from src.engine.domain.volatility import VolatilityConfig
 from src.journal.adapters.repository import JournalRepository
 from src.journal.application.trade_journal import TradeJournalService
 from src.journal.domain.models import MarketSnapshot
@@ -259,9 +258,7 @@ def wired(tmp_path):
     account = AccountService(gateway=_FakeAccountGateway(), store=_NullStore())
 
     risk_manager = RiskManager(caps=RISK_CAPS, timezone="UTC")
-    position_manager = PositionManager(
-        order_service, market_data, volatility_config=VolatilityConfig(atr_period=30)
-    )
+    position_manager = PositionManager(order_service, market_data)
     strategy_registry = StrategyRegistry()
     strategy_registry.register("breakout_v1", BreakoutV1())
     skill_selector = SkillSelector(
@@ -332,7 +329,6 @@ class _Wired:
             skill_selector=self.skill_selector,
             strategy_source=self.strategy_registry,
             entry_timeframe="M5",
-            volatility_config=VolatilityConfig(atr_period=30),
             context_bars=30,
             signal_decisions=self.signal_decisions,
             order_book_capture=order_book_capture,
@@ -371,9 +367,7 @@ async def _wait_until(predicate, *, timeout: float = 2.0, interval: float = 0.01
 
 
 async def test_depth_symbol_gets_a_snapshot_joined_to_its_signal_decision(wired):
-    capture = FakeOrderBookCapture(
-        wired.order_book_repository, depth_symbols={DEPTH_SYMBOL}
-    )
+    capture = FakeOrderBookCapture(wired.order_book_repository, depth_symbols={DEPTH_SYMBOL})
     engine = wired.make_engine(capture)
 
     await engine.on_candle_closed(CandleClosed(symbol=DEPTH_SYMBOL, timeframe="M5"))
@@ -394,9 +388,7 @@ async def test_depth_symbol_gets_a_snapshot_joined_to_its_signal_decision(wired)
 
 
 async def test_no_depth_symbol_gets_no_snapshot_row_but_still_trades(wired):
-    capture = FakeOrderBookCapture(
-        wired.order_book_repository, depth_symbols={DEPTH_SYMBOL}
-    )
+    capture = FakeOrderBookCapture(wired.order_book_repository, depth_symbols={DEPTH_SYMBOL})
     engine = wired.make_engine(capture)
 
     await engine.on_candle_closed(CandleClosed(symbol=NO_DEPTH_SYMBOL, timeframe="M5"))

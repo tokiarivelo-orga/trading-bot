@@ -1,14 +1,23 @@
 # MARKET-REGIME CONFIG.
-# Drives `engine.domain.regime` — the trend (ADX) classifier and the UTC
-# trading-session boundaries used to tag every signal/trade with the market
-# regime it fired in (OBSERVABILITY_PLAN.md Phase 6: volatility bucket comes
-# from `configs/volatility.yaml`'s own ATR-percentile classifier and is
-# reused as-is, not duplicated here). Read by `TradeEngine` on every entry
-# decision to tag `SignalDecision`/`TradeRecord` — never a live risk gate by
-# itself (nothing here blocks an entry the way the volatility guard does).
-# Like risk.yaml/volatility.yaml, this is trading-behavior config, not a
-# secret — safe to hand-edit, but generated/AI refinement code must not
-# modify it.
+# Drives `engine.domain.regime` — the ATR-percentile volatility bucket, the
+# trend (ADX) classifier and the UTC trading-session boundaries used to tag
+# every signal/trade with the market regime it fired in (OBSERVABILITY_PLAN.md
+# Phase 6). Read by `TradeEngine` on every entry decision to tag
+# `SignalDecision`/`TradeRecord` — tags only: nothing here blocks an entry,
+# scales SL/TP, or closes a position. Like risk.yaml, this is
+# trading-behavior config, not a secret — safe to hand-edit, but
+# generated/AI refinement code must not modify it.
+
+# Volatility bucket: the current ATR (`volatility_atr_period` bars) is
+# percentile-ranked against its trailing `volatility_lookback_bars` readings
+# — below low = LOW, above high = HIGH, above extreme = EXTREME, else NORMAL.
+# Values carried over unchanged from the former volatility.yaml so the
+# `regime_volatility` column stays comparable with historical trades.
+volatility_atr_period: 14
+volatility_lookback_bars: 100
+volatility_low_percentile: 20
+volatility_high_percentile: 60
+volatility_extreme_percentile: 98
 
 # Lookback period (in bars) for the ADX (Average Directional Index) trend
 # classifier — same meaning as any other ADX period, e.g. Wilder's default
@@ -20,10 +29,7 @@ adx_period: 14
 # fixed cutoff, not ranked against trailing history — ADX is already a
 # normalized trend-strength score by construction. 20 is the conventional
 # "trend has started" reading (below ~20 is commonly read as no clear trend,
-# 20-25 as an emerging one); not yet tuned against this project's own bots
-# the way volatility.yaml's percentiles were in Phase D — a first
-# regime-split analytics pass (this phase's own deliverable) is what such a
-# tuning search would need real data from.
+# 20-25 as an emerging one); not yet tuned against this project's own bots.
 adx_trend_threshold: 20.0
 
 # Trading-session boundaries, UTC hour-of-day (0-23), used to bucket every

@@ -81,7 +81,10 @@ async def test_an_opened_signal_is_never_downgraded_by_a_later_rejection() -> No
         "broker_rejected",
         checks=(
             DecisionCheck(
-                name="broker_retcode", value=10016.0, threshold=10009.0, comparison="==",
+                name="broker_retcode",
+                value=10016.0,
+                threshold=10009.0,
+                comparison="==",
                 passed=False,
             ),
         ),
@@ -108,8 +111,9 @@ async def test_checks_append_across_gates_rather_than_replacing() -> None:
         "a",
         "rr_gate",
         checks=(
-            DecisionCheck(name="risk_reward", value=0.8, threshold=1.5, comparison=">=",
-                          passed=False),
+            DecisionCheck(
+                name="risk_reward", value=0.8, threshold=1.5, comparison=">=", passed=False
+            ),
         ),
     )
     (decision,) = sink.decisions()

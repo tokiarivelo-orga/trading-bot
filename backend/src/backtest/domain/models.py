@@ -65,9 +65,10 @@ class BacktestSignal:
     outcome: str
     """One of `activity.domain.models.SIGNAL_OUTCOMES` — the same closed
     vocabulary the live decision trail uses since Phase 2 ("opened",
-    "htf_veto", "volatility_guard", "max_positions", "risk_sizing",
-    "spread_veto", "rr_gate", "broker_rejected", "daily_loss_breaker",
-    "skipped"). Backtests produced the older collapsed vocabulary until
+    "htf_veto", "max_positions", "risk_sizing", "spread_veto", "rr_gate",
+    "broker_rejected", "daily_loss_breaker", "skipped"; "volatility_guard"
+    only in reports written before the volatility guard was removed).
+    Backtests produced the older collapsed vocabulary until
     Phase 4 wired the engine's own decision sink into the replay; the legacy
     `risk_rejected` value still appears in report JSON files written before
     that, which is why it remains renderable."""

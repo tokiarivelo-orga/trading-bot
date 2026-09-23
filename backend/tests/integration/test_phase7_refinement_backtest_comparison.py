@@ -23,7 +23,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from src.backtest.application.run_backtest import run_backtest
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.adapters.candle_repository import CandleRepository
 from src.market_data.domain.models import Candle, Timeframe
 from src.shared.db.base import Base
@@ -105,19 +104,7 @@ class NeverTradesStrategy:
         return None
 
 
-async def test_baseline_and_candidate_backtests_reflect_different_signals(
-    database_url, monkeypatch
-):
-    # build_m5_candles()'s textbook "quiet range, then breakout" shape is
-    # exactly what the volatility guard (Phase B) is designed to flag as a
-    # spike; this test's subject is the refinement loop's baseline-vs-
-    # candidate comparison, not that guard (covered by its own unit tests
-    # in tests/unit/engine/), so it's neutralized the same way
-    # test_phase5_backtest_flow.py does.
-    monkeypatch.setattr(
-        "src.backtest.application.run_backtest.load_volatility_config",
-        lambda configs_dir: VolatilityConfig(atr_period=999),
-    )
+async def test_baseline_and_candidate_backtests_reflect_different_signals(database_url):
     baseline_registry = StrategyRegistry()
     baseline_registry.register("breakout_v1", NeverTradesStrategy())
     baseline_report = await run_backtest(

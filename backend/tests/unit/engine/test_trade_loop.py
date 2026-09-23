@@ -8,7 +8,6 @@ from src.engine.application.risk_manager import RiskManager
 from src.engine.application.trade_loop import TradeEngine, _trim_forming_bar, _veto_timeframe
 from src.engine.domain.models import RiskCaps
 from src.engine.domain.regime import RegimeConfig
-from src.engine.domain.volatility import VolatilityConfig
 from src.market_data.domain.models import Candle, SymbolInfo, Timeframe
 from src.shared.events.bus import EventBus
 from src.shared.events.definitions import (
@@ -67,8 +66,8 @@ def _uptrend_candles(symbol: str, timeframe: Timeframe, count: int) -> list[Cand
     # fixed absolute level, so true range/ATR stays flat across the series —
     # otherwise a fixed high/low against a steadily drifting close inflates
     # the true-range "gap" component bar over bar, which the volatility
-    # guard (added in Phase B) would misread as escalating volatility purely
-    # from this fixture's shape, unrelated to whatever the test is checking.
+    # regime tag would misread as escalating volatility purely from this
+    # fixture's shape, unrelated to whatever the test is checking.
     return [
         Candle(
             symbol=symbol,
@@ -149,7 +148,7 @@ class FakeMarketData:
         self.bar_count = bar_count
         self._downtrend = downtrend
         # When set, every timeframe gets this exact series regardless of
-        # `bar_count`/`downtrend` — used by the volatility-guard tests, which
+        # `bar_count`/`downtrend` — used by the volatility-regime tests, which
         # need a specific ATR/percentile shape rather than a generic trend.
         self._fixed_candles = candles
         self.requested_timeframes: list[Timeframe] = []
@@ -497,7 +496,6 @@ def make_engine(
     risk_manager=None,
     context_bars=5,
     event_bus=None,
-    volatility_config=None,
     regime_config=None,
     signal_decisions=None,
     order_book_capture=None,
@@ -512,11 +510,6 @@ def make_engine(
     strategy_source = strategy_source or FakeStrategySource({"fake": strategy})
     risk_manager = risk_manager or RiskManager(caps=CAPS, timezone="UTC")
     event_bus = event_bus if event_bus is not None else EventBus()
-    # Default config's insufficient-history guard (needs atr_period=14 bars,
-    # existing tests use far fewer) keeps every pre-existing test's regime at
-    # NORMAL/nan — i.e. today's unscaled behavior — unless a test opts into a
-    # tuned config via the parameter below.
-    volatility_config = volatility_config or VolatilityConfig()
     regime_config = regime_config or RegimeConfig()
 
     engine = TradeEngine(
@@ -528,7 +521,6 @@ def make_engine(
         skill_selector=skill_selector,
         strategy_source=strategy_source,
         entry_timeframe="M5",
-        volatility_config=volatility_config,
         regime_config=regime_config,
         signal_decisions=signal_decisions,
         order_book_capture=order_book_capture,
@@ -1405,8 +1397,11 @@ async def test_signal_size_multiplier_scales_that_signals_volume_only():
     # implicit default (1.0), so sig1's lot size should come out exactly
     # double sig2/sig3's, and sig2/sig3 must still match each other.
     sig1 = Signal(
-        direction=Direction.BUY, sl_points=10.0, tp_points=10.0,
-        reason="TP1 high-conviction", size_multiplier=2.0,
+        direction=Direction.BUY,
+        sl_points=10.0,
+        tp_points=10.0,
+        reason="TP1 high-conviction",
+        size_multiplier=2.0,
     )
     sig2 = Signal(direction=Direction.BUY, sl_points=10.0, tp_points=25.0, reason="TP2 zone")
     sig3 = Signal(direction=Direction.BUY, sl_points=10.0, tp_points=40.0, reason="TP3 runner")
@@ -1423,71 +1418,26 @@ async def test_signal_size_multiplier_scales_that_signals_volume_only():
     assert vol1 == pytest.approx(2 * vol2)
 
 
-# ---- volatility guard (bot-agnostic, engine-level) --------------------------
+# ---- no volatility guard ----------------------------------------------------
+# The engine-level volatility guard was removed: a volatile market neither
+# blocks an entry nor rescales the strategy's own SL/TP.
 
 
-async def test_extreme_volatility_regime_blocks_entry(caplog):
-    # Engine-level EXTREME-regime volatility guard is intentionally bypassed
-    # (see trade_loop.py's "BYPASSED PER USER REQUEST" logging) — the
-    # EXTREME regime is still detected and logged, but no longer blocks the
-    # entry.
-    volatility_config = VolatilityConfig(atr_period=3, regime_lookback_bars=10)
-    candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 16)
-    market_data = FakeMarketData(candles=candles)
+@pytest.mark.parametrize("last_frac", [None, 0.75], ids=["extreme", "high"])
+async def test_volatility_regime_neither_blocks_nor_scales_the_entry(caplog, last_frac):
+    candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 16, last_frac=last_frac)
     engine, order_service, *_ = make_engine(
-        market_data=market_data, context_bars=16, volatility_config=volatility_config
+        market_data=FakeMarketData(candles=candles), context_bars=16
     )
 
     with caplog.at_level("INFO"):
         await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
     assert len(order_service.opened) == 1
-    assert "ENTRY BLOCKED (volatility guard)" in caplog.text
-    assert "regime=EXTREME" in caplog.text
-
-
-async def test_high_volatility_regime_scales_sl_and_tp():
-    volatility_config = VolatilityConfig(atr_period=3, regime_lookback_bars=10)
-    candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 16, last_frac=0.75)
-    market_data = FakeMarketData(candles=candles)
-    engine, order_service, *_ = make_engine(
-        market_data=market_data, context_bars=16, volatility_config=volatility_config
-    )
-
-    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
-
-    assert len(order_service.opened) == 1
-    order = order_service.opened[0]
-    # VolatilityConfig defaults: sl_multiplier_high = tp_multiplier_high = 1.3,
-    # versus the unscaled NORMAL baseline in
-    # test_successful_entry_opens_position_with_strategy_and_skill
-    # (sl=2400.30-10.0, tp=2400.30+15.0).
-    sl_mult = volatility_config.sl_multiplier_high
-    tp_mult = volatility_config.tp_multiplier_high
-    assert order["sl"] == 2400.30 - 1 * BUY_SIGNAL.sl_points * sl_mult
-    assert order["tp"] == 2400.30 + 1 * BUY_SIGNAL.tp_points * tp_mult
-
-
-async def test_disabled_volatility_guard_does_not_block_extreme_entry():
-    # Same EXTREME fixture as test_extreme_volatility_regime_blocks_entry, but
-    # with the live guard switched off first -- entry must go through
-    # unblocked and SL/TP must be unscaled (mult=1.0), as if volatility_config
-    # didn't exist at all.
-    volatility_config = VolatilityConfig(atr_period=3, regime_lookback_bars=10)
-    candles = _volatility_ramp_candles("XAUUSD", Timeframe.M5, 16)
-    market_data = FakeMarketData(candles=candles)
-    engine, order_service, *_ = make_engine(
-        market_data=market_data, context_bars=16, volatility_config=volatility_config
-    )
-    engine.set_volatility_guard_enabled(False)
-
-    await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
-
-    assert len(order_service.opened) == 1
+    assert "volatility guard" not in caplog.text
     order = order_service.opened[0]
     assert order["sl"] == 2400.30 - 1 * BUY_SIGNAL.sl_points
     assert order["tp"] == 2400.30 + 1 * BUY_SIGNAL.tp_points
-
 
 
 # --- decision-trail log format (consumed by the signal-trail parsers) -------

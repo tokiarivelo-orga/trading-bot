@@ -163,9 +163,7 @@ def test_earliest_created_at_is_per_account(repository):
 
 
 def _check(name: str, *, passed: bool = True) -> DecisionCheck:
-    return DecisionCheck(
-        name=name, value=1.0, threshold=2.0, comparison="<=", passed=passed
-    )
+    return DecisionCheck(name=name, value=1.0, threshold=2.0, comparison="<=", passed=passed)
 
 
 def test_checks_round_trip_through_the_json_column(repository):

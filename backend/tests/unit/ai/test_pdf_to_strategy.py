@@ -334,9 +334,7 @@ async def test_create_draft_from_text_extracts_spec(service):
 
 
 async def test_create_draft_from_text_with_symbol_overrides_extraction(service):
-    draft = await service.create_draft_from_text(
-        "Buy the pullback in an uptrend.", symbol="EURUSD"
-    )
+    draft = await service.create_draft_from_text("Buy the pullback in an uptrend.", symbol="EURUSD")
     assert draft.extracted_spec.symbols == ("XAUUSD",)
     assert draft.edited_spec is not None
     assert draft.edited_spec.symbols == ("EURUSD",)
