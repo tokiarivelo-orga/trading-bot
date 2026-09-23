@@ -1,7 +1,11 @@
 name: normal/xauusd/xauusd_snd_qm_structure_adaptive_m15
 symbol: XAUUSD
 strategy: xauusd_snd_qm_structure_adaptive_m15
-risk_multiplier: 1.0
-sessions: []
+risk_multiplier: 0.5
+sessions:
+- start: 00:00
+  end: '14:59'
+- start: '18:00'
+  end: '23:59'
 param_overrides: {}
 htf_veto_override: null

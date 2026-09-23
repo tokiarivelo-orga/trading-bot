@@ -2,6 +2,10 @@ name: normal/xauusd/xauusd_structure_shift_m1
 symbol: XAUUSD
 strategy: xauusd_structure_shift_m1
 risk_multiplier: 1.0
-sessions: []
+sessions:
+- start: 00:00
+  end: 02:59
+- start: 06:00
+  end: '23:59'
 param_overrides: {}
 htf_veto_override: null

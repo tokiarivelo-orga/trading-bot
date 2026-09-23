@@ -2,7 +2,13 @@ name: normal/xauusd/xauusd_snd_qm_structure_adaptive_m1
 symbol: XAUUSD
 strategy: xauusd_snd_qm_structure_adaptive_m1
 risk_multiplier: 1.0
-sessions: []
+sessions:
+- start: 00:00
+  end: 08:59
+- start: '12:00'
+  end: '17:59'
+- start: '21:00'
+  end: '23:59'
 param_overrides:
   min_confluence_score: 3
   sl_zone_buffer_atr_mult: 0.2
