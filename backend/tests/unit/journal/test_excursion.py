@@ -23,6 +23,8 @@ from src.shared.events.bus import EventBus
 from src.shared.events.definitions import CandleClosed, PositionClosed, PositionOpened
 
 ENTRY = 2400.00
+T1 = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+T2 = datetime(2026, 8, 5, 12, 5, tzinfo=UTC)
 
 
 class FakeMarketContext:
@@ -87,13 +89,19 @@ def opened(side: str = "buy") -> PositionOpened:
 
 
 def test_a_buys_excursion_is_high_above_entry_and_low_below_it():
-    result = extend_excursion(Excursion(), side="buy", open_price=ENTRY, high=2405.0, low=2397.0)
+    result = extend_excursion(
+        Excursion(), side="buy", open_price=ENTRY, high=2405.0, low=2397.0, time=T1
+    )
     assert result.mfe == pytest.approx(5.0)
     assert result.mae == pytest.approx(3.0)
+    assert result.mfe_time == T1
+    assert result.mae_time == T1
 
 
 def test_a_sells_excursion_mirrors_a_buys():
-    result = extend_excursion(Excursion(), side="sell", open_price=ENTRY, high=2405.0, low=2397.0)
+    result = extend_excursion(
+        Excursion(), side="sell", open_price=ENTRY, high=2405.0, low=2397.0, time=T1
+    )
     assert result.mfe == pytest.approx(3.0)
     assert result.mae == pytest.approx(5.0)
 
@@ -101,28 +109,39 @@ def test_a_sells_excursion_mirrors_a_buys():
 def test_a_candle_entirely_on_one_side_of_entry_never_reports_negative_excursion():
     """A buy whose candle never traded below entry has zero adverse
     excursion, not a negative one — MFE/MAE are magnitudes."""
-    result = extend_excursion(Excursion(), side="buy", open_price=ENTRY, high=2406.0, low=2402.0)
+    result = extend_excursion(
+        Excursion(), side="buy", open_price=ENTRY, high=2406.0, low=2402.0, time=T1
+    )
     assert result.mfe == pytest.approx(6.0)
     assert result.mae == pytest.approx(0.0)
 
 
 def test_a_quieter_later_candle_never_shrinks_an_earlier_spike():
     after_spike = extend_excursion(
-        Excursion(), side="buy", open_price=ENTRY, high=2410.0, low=2390.0
+        Excursion(), side="buy", open_price=ENTRY, high=2410.0, low=2390.0, time=T1
     )
     after_quiet = extend_excursion(
-        after_spike, side="buy", open_price=ENTRY, high=2401.0, low=2399.5
+        after_spike, side="buy", open_price=ENTRY, high=2401.0, low=2399.5, time=T2
     )
     assert after_quiet.mfe == pytest.approx(10.0)
     assert after_quiet.mae == pytest.approx(10.0)
+    # The peaks happened on the spike candle, not the quiet one.
+    assert after_quiet.mfe_time == T1
+    assert after_quiet.mae_time == T1
 
 
 def test_finalizing_folds_in_the_exit_price():
     result = finalize_excursion(
-        Excursion(mfe=2.0, mae=1.0), side="buy", open_price=ENTRY, close_price=2408.0
+        Excursion(mfe=2.0, mae=1.0, mfe_time=T1, mae_time=T1),
+        side="buy",
+        open_price=ENTRY,
+        close_price=2408.0,
+        time=T2,
     )
     assert result.mfe == pytest.approx(8.0)
     assert result.mae == pytest.approx(1.0)
+    assert result.mfe_time == T2  # the exit price set the new peak
+    assert result.mae_time == T1
 
 
 # ── accumulation through the journal service ──────────────────────────────

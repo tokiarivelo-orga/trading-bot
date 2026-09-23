@@ -122,14 +122,22 @@ async def test_htf_veto_outcome():
     assert sink.check("htf_confirm").passed is True
 
 
-async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused():
+async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused(caplog):
+    # The pre-trade risk gate (kill switch / daily-loss / consecutive-loss
+    # pause / max positions) is intentionally bypassed — see trade_loop.py's
+    # "ENTRY BLOCKED (risk gate): ... (BYPASSED PER USER REQUEST)". A paused
+    # engine still opens the trade and records no "daily_loss_breaker"
+    # outcome; only the log line says the gate would have blocked it.
     risk_manager = RiskManager(caps=CAPS, timezone="UTC")
     risk_manager.kill()
 
-    sink, order_service = await _run(risk_manager=risk_manager)
+    with caplog.at_level("INFO"):
+        sink, order_service = await _run(risk_manager=risk_manager)
 
-    assert order_service.opened == []
-    assert sink.final_outcome == "daily_loss_breaker"
+    assert len(order_service.opened) == 1
+    assert sink.final_outcome == "skipped"
+    assert "ENTRY BLOCKED (risk gate)" in caplog.text
+    assert "BYPASSED PER USER REQUEST" in caplog.text
 
 
 async def test_max_open_positions_cap_outcome():
@@ -243,12 +251,14 @@ async def test_a_filled_signal_records_every_gate_it_cleared():
     assert all(c.passed for c in passed.values())
 
 
-async def test_the_circuit_breaker_and_the_position_cap_are_no_longer_one_bucket():
-    """Phase 2's whole point: a paused engine and a full position book used to
-    both read `risk_rejected`."""
+async def test_neither_the_circuit_breaker_nor_the_position_cap_blocks_an_entry():
+    """Both pre-trade gates are bypassed (see
+    test_risk_gate_outcome_when_the_circuit_breaker_is_paused): a paused
+    engine and a full position book each still open the trade, and neither
+    stamps its "daily_loss_breaker"/"max_positions" outcome."""
     paused = RiskManager(caps=CAPS, timezone="UTC")
     paused.kill()
-    paused_sink, _ = await _run(risk_manager=paused)
+    paused_sink, paused_orders = await _run(risk_manager=paused)
 
     full_caps = RiskCaps(
         risk_per_trade_pct=1.0,
@@ -257,10 +267,14 @@ async def test_the_circuit_breaker_and_the_position_cap_are_no_longer_one_bucket
         max_trades_per_day_enabled=False,
         consecutive_loss_pause=5,
     )
-    full_sink, _ = await _run(risk_manager=RiskManager(caps=full_caps, timezone="UTC"))
+    full_sink, full_orders = await _run(
+        risk_manager=RiskManager(caps=full_caps, timezone="UTC")
+    )
 
-    assert paused_sink.final_outcome == "daily_loss_breaker"
-    assert full_sink.final_outcome == "max_positions"
+    assert len(paused_orders.opened) == 1
+    assert len(full_orders.opened) == 1
+    assert paused_sink.final_outcome == "skipped"
+    assert full_sink.final_outcome == "skipped"
 
 
 async def test_the_order_gets_the_signals_emit_time_for_latency_measurement():

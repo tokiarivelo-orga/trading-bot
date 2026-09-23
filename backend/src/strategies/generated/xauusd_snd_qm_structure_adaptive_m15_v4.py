@@ -925,9 +925,9 @@ def _momentum_invalidated(zone, zone_highs, zone_lows, zone_closes, zone_atr_val
         if not np.isfinite(atr_at) or atr_at <= 0:
             return False
         ranges_atr.append((zone_highs[i] - zone_lows[i]) / atr_at)
-        if demand and zone_closes[i] < zone["price_low"]:
-            beyond += 1
-        elif (not demand) and zone_closes[i] > zone["price_high"]:
+        if (demand and zone_closes[i] < zone["price_low"]) or (
+            (not demand) and zone_closes[i] > zone["price_high"]
+        ):
             beyond += 1
     if beyond < 2:
         return False
@@ -1427,7 +1427,9 @@ class XauusdSndQmStructureAdaptiveM1:
                 if not confirmed:
                     continue
 
-            if _momentum_invalidated(zone, zone_highs, zone_lows, zone_closes, zone_atr_values, params):
+            if _momentum_invalidated(
+                zone, zone_highs, zone_lows, zone_closes, zone_atr_values, params
+            ):
                 continue
 
             htf_align = self._htf["dir"]

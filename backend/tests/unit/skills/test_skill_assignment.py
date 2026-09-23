@@ -315,15 +315,29 @@ async def test_remove_bot_stops_it_without_touching_others(setup):
     assert [d.strategy_name for d in decisions] == ["mean_reversion_v1"]
 
 
-async def test_remove_last_bot_leaves_symbol_in_app_config(setup):
-    service, repository, selector, _skills_dir, _candle_stream, _spread_gate, configs_dir = setup
+async def test_remove_last_bot_deactivates_the_symbol(setup):
+    # Mirror of add_bot's activation: removing a symbol's last bot takes the
+    # symbol out of app.yaml and stops streaming its candles.
+    service, repository, selector, _skills_dir, candle_stream, _spread_gate, configs_dir = setup
 
     await service.remove_bot("XAUUSD", "breakout_v1")
 
     assert repository.list_for_symbol("XAUUSD") == []
     assert selector.select_all("XAUUSD") == []
     app_config = yaml.safe_load((configs_dir / "app.yaml").read_text())
-    assert "XAUUSD" in app_config["symbols"]  # deliberately not deactivated
+    assert "XAUUSD" not in app_config["symbols"]
+    assert "XAUUSD" not in candle_stream.active_symbols
+
+
+async def test_remove_bot_keeps_the_symbol_while_other_bots_remain(setup):
+    service, _repository, _selector, _skills_dir, candle_stream, _spread_gate, configs_dir = setup
+    await service.add_bot("XAUUSD", "mean_reversion_v1")
+
+    await service.remove_bot("XAUUSD", "breakout_v1")
+
+    app_config = yaml.safe_load((configs_dir / "app.yaml").read_text())
+    assert "XAUUSD" in app_config["symbols"]
+    assert "XAUUSD" in candle_stream.active_symbols
 
 
 async def test_remove_bot_unknown_bot_rejected(setup):

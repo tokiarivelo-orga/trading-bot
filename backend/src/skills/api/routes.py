@@ -214,8 +214,9 @@ async def update_bot_config(
     description=(
         "Stops `bot_name` from trading `symbol`: deletes its YAML file and removes it from the "
         "running SkillSelector immediately, no restart needed. Every other bot on the symbol "
-        "keeps trading unaffected. Leaves the symbol itself in the automated-trading universe "
-        "even if this was its last bot — nothing re-activates it until another bot is added."
+        "keeps trading unaffected. If this was the symbol's last bot, the symbol also leaves "
+        "the automated-trading universe: it is removed from `configs/app.yaml`'s `symbols` "
+        "and its candle streaming stops (adding a bot again re-activates it)."
     ),
     responses={404: {"description": "This symbol has no bot with that bot_name."}},
 )

@@ -1531,7 +1531,8 @@ class XauusdSndApexTrendguardM1:
             # Empty unless the fatigue gate is enabled, so the reason line
             # of a default-configured run is byte-identical to before.
             f"{fatigue_note + ' ' if fatigue_note else ''}"
-            f"conf[{confirm_note}] m1rev={reversal_streak} overlap={candidate['overlaps']} sl={sl_points:.2f}"
+            f"conf[{confirm_note}] m1rev={reversal_streak} "
+            f"overlap={candidate['overlaps']} sl={sl_points:.2f}"
         )
 
         signals = []

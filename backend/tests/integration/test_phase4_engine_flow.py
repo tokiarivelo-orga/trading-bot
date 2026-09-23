@@ -461,15 +461,15 @@ async def test_volatility_guard_endpoints_are_gone(api):
     assert not hasattr(api.container.position_manager, "set_volatility_guard_enabled")
 
 
-async def test_engine_does_not_reenter_once_max_open_positions_reached(api):
-    await api.container.trade_engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
-    # RISK_CAPS allows 2 open positions; feed the same breakout candle again —
-    # the strategy would signal again, but this asserts the pipe runs
-    # end-to-end a second time without error and caps eventually apply.
-    await api.container.trade_engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
-    positions = (await api.get("/accounts/default/broker/positions")).json()
-    assert len(positions) == 2  # exactly at the cap, not beyond
-
-    await api.container.trade_engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
-    positions = (await api.get("/accounts/default/broker/positions")).json()
-    assert len(positions) == 2  # third attempt blocked by max_open_positions
+async def test_engine_keeps_entering_past_max_open_positions_while_the_cap_is_bypassed(api):
+    # The pre-trade risk gate, max_open_positions included, is intentionally
+    # bypassed (trade_loop.py: "ENTRY BLOCKED (risk gate): ... BYPASSED PER
+    # USER REQUEST"). RISK_CAPS allows 2 open positions, yet every repeat of
+    # the same breakout candle opens one more.
+    for expected in (1, 2, 3):
+        await api.container.trade_engine.on_candle_closed(
+            CandleClosed(symbol="XAUUSD", timeframe="M5")
+        )
+        positions = (await api.get("/accounts/default/broker/positions")).json()
+        assert len(positions) == expected
+    assert RISK_CAPS.max_open_positions == 2

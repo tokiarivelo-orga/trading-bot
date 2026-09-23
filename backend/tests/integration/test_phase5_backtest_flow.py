@@ -308,10 +308,11 @@ async def test_backtest_uses_db_backed_symbol_spec_without_any_yaml(tmp_path, da
 async def test_run_backtest_min_lot_fallback_override(tmp_path, database_url):
     """`_minimal_configs_dir`'s risk.yaml has no min_lot_fallback_enabled key
     (defaults False) — a $50 balance is too small for breakout_v1's normal
-    risk % to reach volume_min, so sizing rejects both signals with the file
-    default. Passing the override params to run_backtest() turns the
-    fallback on for this call only, without touching the file, and the same
-    two signals now open."""
+    risk % to reach volume_min. The engine's sizing rejection is
+    intentionally bypassed (trade_loop.py: "BYPASSED PER USER REQUEST, USING
+    MIN VOLUME"), so both signals still open at volume_min. Passing the
+    override params turns on the real min-lot fallback instead, which opens
+    the same two signals through its own logged path."""
     configs_dir = _minimal_configs_dir(tmp_path, xauusd_yaml=False)
     engine = create_engine(database_url)
     SymbolSpecRepository(sessionmaker(bind=engine, expire_on_commit=False)).upsert(
@@ -326,7 +327,10 @@ async def test_run_backtest_min_lot_fallback_override(tmp_path, database_url):
         configs_dir=configs_dir,
         starting_balance=50.0,
     )
-    assert len(report.trades) == 0
+    assert len(report.trades) == 2
+    assert all(t.volume == _spec().volume_min for t in report.trades)
+    assert any("USING MIN VOLUME" in e.message for e in report.activity_log)
+    assert not any("min-lot fallback" in e.message for e in report.activity_log)
 
     report = await run_backtest(
         "breakout_v1",
@@ -356,12 +360,11 @@ async def test_backtest_raises_no_symbol_spec_without_db_row_or_yaml(tmp_path, d
 
 
 async def test_db_symbol_spec_takes_precedence_over_legacy_yaml(tmp_path, database_url):
-    """The legacy YAML has a normal volume_min (0.01, same as the main
-    fixture test above, which trades fine). The DB row's volume_min is set
-    absurdly high (1000) — risk-based position sizing can never produce a
-    viable lot size that large, so no trade opens. If the YAML were still
-    winning over the DB row, trades would go through exactly like the main
-    test; zero trades here proves the DB row is the one actually used."""
+    """The legacy YAML has a normal volume_min (0.01). The DB row's
+    volume_min is set absurdly high (1000): risk sizing rejects that, and
+    the bypassed sizing gate then forces the trade to volume_min. So every
+    trade opening at 1000 lots, not 0.01, proves the DB row is the one
+    actually used."""
     configs_dir = _minimal_configs_dir(tmp_path, xauusd_yaml=True)
     engine = create_engine(database_url)
     repository = SymbolSpecRepository(sessionmaker(bind=engine, expire_on_commit=False))
@@ -386,4 +389,5 @@ async def test_db_symbol_spec_takes_precedence_over_legacy_yaml(tmp_path, databa
         configs_dir=configs_dir,
     )
 
-    assert report.trades == ()
+    assert report.trades
+    assert all(t.volume == 1000.0 for t in report.trades)
