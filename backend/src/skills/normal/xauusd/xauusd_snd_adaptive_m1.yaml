@@ -2,6 +2,16 @@ name: normal/xauusd/xauusd_snd_adaptive_m1
 symbol: XAUUSD
 strategy: xauusd_snd_adaptive_m1
 risk_multiplier: 0.5
-sessions: []
+sessions:
+- start: 00:00
+  end: '01:59'
+- start: 03:00
+  end: '11:59'
+- start: '13:00'
+  end: '13:59'
+- start: '16:00'
+  end: '20:59'
+- start: '22:00'
+  end: '23:59'
 param_overrides: {}
 htf_veto_override: null

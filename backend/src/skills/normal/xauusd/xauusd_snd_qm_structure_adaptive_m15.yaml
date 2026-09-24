@@ -6,6 +6,8 @@ sessions:
 - start: 00:00
   end: '14:59'
 - start: '18:00'
+  end: '18:59'
+- start: '20:00'
   end: '23:59'
 param_overrides: {}
 htf_veto_override: null

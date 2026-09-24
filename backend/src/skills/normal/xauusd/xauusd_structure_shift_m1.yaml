@@ -1,7 +1,7 @@
 name: normal/xauusd/xauusd_structure_shift_m1
 symbol: XAUUSD
 strategy: xauusd_structure_shift_m1
-risk_multiplier: 1.0
+risk_multiplier: 1.25
 sessions:
 - start: 00:00
   end: 02:59
