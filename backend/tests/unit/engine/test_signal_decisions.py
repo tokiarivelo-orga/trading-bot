@@ -95,62 +95,28 @@ async def test_the_outcome_is_stamped_on_the_same_signal_id_that_was_recorded():
 
 
 async def test_htf_veto_outcome():
-    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
-    # "BYPASSED PER USER REQUEST" logging) — the veto is still evaluated
-    # (hence still checked/recorded below) but no longer blocks the entry
-    # or stamps a final "htf_veto" outcome; the signal proceeds to "opened".
-    #
     # Buy signal against a downtrend on the veto timeframe (M15, one above M5).
     sink, order_service = await _run(
         market_data=FakeMarketData(bar_count=60, downtrend=True), context_bars=60
     )
 
-    assert len(order_service.opened) == 1
-    # The engine itself never stamps "opened" (see
-    # test_the_outcome_is_stamped_on_the_same_signal_id_that_was_recorded —
-    # that's the real OrderService's job, and FakeOrderService here doesn't
-    # do it either), and the bypassed veto no longer stamps "htf_veto"
-    # either, so `sink.outcomes` stays empty and `final_outcome` falls back
-    # to its "skipped" default — despite the trade actually opening, which
-    # `order_service.opened` above is the real proof of.
-    assert sink.final_outcome == "skipped"
-    # The bypassed path also always records this check as passed=True now,
-    # even when the veto actually failed (`_htf_check(passed=True)` is
-    # called unconditionally) — the decision trail no longer reflects the
-    # true HTF-confirm result on a vetoed signal, a side effect of the same
-    # bypass this test documents.
-    assert sink.check("htf_confirm").passed is True
+    assert order_service.opened == []
+    assert sink.final_outcome == "htf_veto"
+    assert "test buy — " in sink.outcomes[-1][2]
+    assert sink.check("htf_confirm").passed is False
 
 
-async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused(caplog):
-    # The pre-trade risk gate (kill switch / daily-loss / consecutive-loss
-    # pause / max positions) is intentionally bypassed — see trade_loop.py's
-    # "ENTRY BLOCKED (risk gate): ... (BYPASSED PER USER REQUEST)". A paused
-    # engine still opens the trade and records no "daily_loss_breaker"
-    # outcome; only the log line says the gate would have blocked it.
+async def test_risk_gate_outcome_when_the_circuit_breaker_is_paused():
     risk_manager = RiskManager(caps=CAPS, timezone="UTC")
     risk_manager.kill()
 
-    with caplog.at_level("INFO"):
-        sink, order_service = await _run(risk_manager=risk_manager)
+    sink, order_service = await _run(risk_manager=risk_manager)
 
-    assert len(order_service.opened) == 1
-    assert sink.final_outcome == "skipped"
-    assert "ENTRY BLOCKED (risk gate)" in caplog.text
-    assert "BYPASSED PER USER REQUEST" in caplog.text
+    assert order_service.opened == []
+    assert sink.final_outcome == "daily_loss_breaker"
 
 
 async def test_max_open_positions_cap_outcome():
-    # The per-signal (multi-TP-leg) max-open-positions loop cap is
-    # intentionally bypassed — both its logic and its "max_positions"
-    # DecisionCheck/outcome recording are commented out (see trade_loop.py's
-    # "BYPASSED PER USER REQUEST" logging elsewhere in this same method):
-    # both TP targets now open even though the cap is 1, and no
-    # "max_positions" outcome is ever recorded for this candle. The only
-    # "open_positions" check still recorded is the top-level pretrade one
-    # (unconditionally passed=True now too), taken before either TP opens
-    # — value 0.0 (no existing positions), not the old per-TP "at cap"
-    # snapshot.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -169,26 +135,23 @@ async def test_max_open_positions_cap_outcome():
         risk_manager=RiskManager(caps=caps, timezone="UTC"),
     )
 
-    assert len(order_service.opened) == 2
-    assert not any(o[1] == "max_positions" for o in sink.outcomes)
+    # TP1 fills (its outcome is the order service's job), TP2 hits the cap —
+    # which must not downgrade the decision away from "opened".
+    assert len(order_service.opened) == 1
+    assert sink.outcomes[-1][1] == "max_positions"
+    assert "at cap 1" in sink.outcomes[-1][2]
     cap_check = sink.check("open_positions")
-    assert (cap_check.value, cap_check.threshold, cap_check.passed) == (0.0, 1.0, True)
+    assert (cap_check.value, cap_check.threshold, cap_check.passed) == (1.0, 1.0, False)
 
 
 async def test_risk_sizing_rejection_outcome():
-    # Risk-sizing rejection is intentionally bypassed too — see
-    # trade_loop.py's "BYPASSED PER USER REQUEST, USING MIN VOLUME"
-    # logging: its "risk_sizing" outcome recording is commented out and the
-    # entry opens anyway at the broker minimum volume, so the recorded
-    # "position_volume" check (sizing.volume >= volume_min) now always
-    # passes too, since sizing.volume was itself forced to volume_min.
-    #
     # A balance too small to fund even the minimum lot at this SL distance.
     sink, order_service = await _run(account=FakeAccountService(balance=1.0))
 
-    assert len(order_service.opened) == 1
-    assert not any(o[1] == "risk_sizing" for o in sink.outcomes)
-    assert sink.check("position_volume").passed is True
+    assert order_service.opened == []
+    assert sink.final_outcome == "risk_sizing"
+    assert "TP1:" in sink.outcomes[-1][2]
+    assert sink.check("position_volume").passed is False
 
 
 async def test_no_account_connected_is_recorded_as_skipped():
@@ -251,14 +214,12 @@ async def test_a_filled_signal_records_every_gate_it_cleared():
     assert all(c.passed for c in passed.values())
 
 
-async def test_neither_the_circuit_breaker_nor_the_position_cap_blocks_an_entry():
-    """Both pre-trade gates are bypassed (see
-    test_risk_gate_outcome_when_the_circuit_breaker_is_paused): a paused
-    engine and a full position book each still open the trade, and neither
-    stamps its "daily_loss_breaker"/"max_positions" outcome."""
+async def test_the_circuit_breaker_and_the_position_cap_are_no_longer_one_bucket():
+    """Phase 2's whole point: a paused engine and a full position book used to
+    both read `risk_rejected`."""
     paused = RiskManager(caps=CAPS, timezone="UTC")
     paused.kill()
-    paused_sink, paused_orders = await _run(risk_manager=paused)
+    paused_sink, _ = await _run(risk_manager=paused)
 
     full_caps = RiskCaps(
         risk_per_trade_pct=1.0,
@@ -267,14 +228,10 @@ async def test_neither_the_circuit_breaker_nor_the_position_cap_blocks_an_entry(
         max_trades_per_day_enabled=False,
         consecutive_loss_pause=5,
     )
-    full_sink, full_orders = await _run(
-        risk_manager=RiskManager(caps=full_caps, timezone="UTC")
-    )
+    full_sink, _ = await _run(risk_manager=RiskManager(caps=full_caps, timezone="UTC"))
 
-    assert len(paused_orders.opened) == 1
-    assert len(full_orders.opened) == 1
-    assert paused_sink.final_outcome == "skipped"
-    assert full_sink.final_outcome == "skipped"
+    assert paused_sink.final_outcome == "daily_loss_breaker"
+    assert full_sink.final_outcome == "max_positions"
 
 
 async def test_the_order_gets_the_signals_emit_time_for_latency_measurement():

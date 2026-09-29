@@ -143,10 +143,11 @@ def database_url_for(tmp_path) -> str:
     # No H1 seeded on purpose: `XauusdRegimeRouterM1.evaluate()` only ever
     # reads its own M1 entry frame (see the strategy's module docstring —
     # confirmation_timeframes=("M5", "H1") is declared solely so the
-    # engine's own HTF-veto pipeline has native M5/H1 to check against, and
-    # that gate is currently bypassed engine-wide per CLAUDE.md/the plan's
-    # scope). `ReplayMarketDataPort.get_candles` on an unseeded timeframe
-    # returns an empty list rather than raising, so this is safe.
+    # engine's own HTF-veto pipeline has native M5/H1 to check against).
+    # `ReplayMarketDataPort.get_candles` on an unseeded timeframe returns an
+    # empty list rather than raising, and `confirm()` treats "no HTF data to
+    # disagree with" as not-vetoed, so this is safe even with the HTF-veto
+    # gate enforced.
     return url
 
 

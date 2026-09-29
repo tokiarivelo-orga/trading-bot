@@ -669,23 +669,14 @@ async def test_no_signal_skips_entry():
 
 
 async def test_htf_veto_skips_entry():
-    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
-    # "BYPASSED PER USER REQUEST" logging) — the veto is still evaluated and
-    # logged, but no longer blocks the entry. This test now documents that:
-    # the earlier hard-block behavior is exactly what got turned off.
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     engine, order_service, *_ = make_engine(market_data=market_data, context_bars=60)
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1
+    assert order_service.opened == []
 
 
 async def test_pretrade_risk_block_skips_entry():
-    # Engine-level pretrade risk gate (max_open_positions here) is
-    # intentionally bypassed — see trade_loop.py's "BYPASSED PER USER
-    # REQUEST" logging. The gate is still evaluated and logged but no
-    # longer blocks the entry, so a second position opens on top of the
-    # existing one despite the cap of 1.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -711,7 +702,7 @@ async def test_pretrade_risk_block_skips_entry():
     )
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1
+    assert order_service.opened == []
 
 
 async def test_order_rejected_does_not_crash_or_record_trade():
@@ -1058,13 +1049,10 @@ async def test_two_bots_on_one_symbol_each_place_their_own_order():
 
 
 async def test_second_bot_sizing_sees_first_bots_fresh_position():
-    # Originally: max_open_positions=1 meant the second bot in the same
-    # candle close would see the first bot's just-opened position and get
-    # blocked by the risk gate, proving the pretrade check is re-fetched per
-    # bot rather than hoisted once for the whole candle. The gate itself is
-    # now intentionally bypassed (see trade_loop.py's "BYPASSED PER USER
-    # REQUEST" logging), so both bots open — this documents that current
-    # reality rather than the per-bot re-fetch, which is now moot.
+    # max_open_positions=1: the second bot in the same candle close must see
+    # the first bot's just-opened position and get blocked by the risk gate
+    # — proves the pretrade check is re-fetched per bot rather than hoisted
+    # once for the whole candle.
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
         daily_loss_limit_pct=5.0,
@@ -1087,8 +1075,7 @@ async def test_second_bot_sizing_sees_first_bots_fresh_position():
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 2
-    assert [o["magic"] for o in order_service.opened] == [111, 222]
+    assert [o["magic"] for o in order_service.opened] == [111]
 
 
 async def test_param_override_reaches_strategy_evaluate():
@@ -1153,10 +1140,6 @@ async def test_two_bots_same_strategy_different_param_overrides_do_not_leak():
 
 
 async def test_htf_veto_override_forces_veto_on_despite_strategy_default_off():
-    # Engine-level HTF veto is intentionally bypassed (see trade_loop.py's
-    # "BYPASSED PER USER REQUEST" logging) — forcing the veto on via
-    # `htf_veto_override` still gets evaluated and logged, but no longer
-    # blocks the entry.
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     strategy = FakeStrategy(BUY_SIGNAL, htf_veto=False)
     decision = SkillDecision(
@@ -1175,7 +1158,7 @@ async def test_htf_veto_override_forces_veto_on_despite_strategy_default_off():
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1
+    assert order_service.opened == []
 
 
 async def test_htf_veto_override_forces_veto_off_despite_strategy_default_on():
@@ -1523,12 +1506,9 @@ async def test_no_account_connected_line_is_skill_scoped_and_parses(caplog):
     assert "no account balance available" in signals[0].reason
 
 
-async def test_max_open_positions_per_signal_cap_is_bypassed(caplog):
-    # The per-signal (multi-TP-leg) max-open-positions loop cap, and its
-    # "ENTRY BLOCKED (max open positions cap reached)" log line, are
-    # intentionally bypassed (commented out — see trade_loop.py's "BYPASSED
-    # PER USER REQUEST" logging elsewhere in this same method): both TP
-    # targets now open even though the cap is 1.
+async def test_max_open_positions_per_signal_cap_blocks_extra_legs(caplog):
+    # A multi-TP-leg signal must stop opening further legs once the account
+    # hits max_open_positions, even mid-loop within the same signal.
     caplog.set_level("INFO")
     caps = RiskCaps(
         risk_per_trade_pct=1.0,
@@ -1550,26 +1530,20 @@ async def test_max_open_positions_per_signal_cap_is_bypassed(caplog):
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 2
-    assert not any(
+    assert len(order_service.opened) == 1
+    assert any(
         m.startswith("ENTRY BLOCKED (max open positions cap reached)") for m in caplog.messages
     )
 
 
 async def test_risk_sizing_rejection_prefix_has_no_tp_index(caplog):
-    # Risk-sizing rejection is intentionally bypassed too — see
-    # trade_loop.py's "BYPASSED PER USER REQUEST, USING MIN VOLUME" logging:
-    # the rejection is still evaluated and logged (hence still parses as
-    # "risk_rejected" in the signal trail below, matching the log line
-    # actually emitted), but the entry now opens anyway at the broker
-    # minimum volume instead of being skipped.
     caplog.set_level("INFO")
     # A zero balance makes sizing fail for every target.
     engine, order_service, *_ = make_engine(account=FakeAccountService(balance=0.0))
 
     await engine.on_candle_closed(CandleClosed(symbol="XAUUSD", timeframe="M5"))
 
-    assert len(order_service.opened) == 1
+    assert order_service.opened == []
     line = next(m for m in caplog.messages if m.startswith("ENTRY REJECTED (risk sizing)"))
     assert line.startswith("ENTRY REJECTED (risk sizing): ")
     assert " — TP1: " in line
@@ -1822,11 +1796,7 @@ async def test_order_book_capture_fires_once_on_the_vetoed_path():
     """Same trigger point as the regime tag and `_record_decision` — a
     signal on the HTF-veto path still gets exactly one capture attempt,
     since capture is scheduled right after `_record_decision`, well before
-    the HTF-confirm gate runs. The HTF veto itself is now intentionally
-    bypassed (see trade_loop.py's "BYPASSED PER USER REQUEST" logging), so
-    unlike when this test was written the signal now also fills — capture
-    firing exactly once at that same trigger point is what's still under
-    test here."""
+    the HTF-confirm gate runs (and the veto below it blocks the entry)."""
     capture = FakeOrderBookCapture()
     market_data = FakeMarketData(bar_count=60, downtrend=True)
     engine, order_service, *_ = make_engine(
@@ -1837,7 +1807,7 @@ async def test_order_book_capture_fires_once_on_the_vetoed_path():
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
-    assert len(order_service.opened) == 1
+    assert order_service.opened == []
     assert len(capture.calls) == 1
     assert capture.calls[0][1] == "XAUUSD"
 

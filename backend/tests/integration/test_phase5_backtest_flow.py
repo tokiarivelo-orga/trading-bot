@@ -25,6 +25,7 @@ from src.market_data.adapters.replay import SymbolSpec
 from src.market_data.adapters.symbol_spec_repository import SymbolSpecRepository
 from src.market_data.domain.models import Candle, Timeframe
 from src.shared.db.base import Base
+from src.skills.domain.models import NormalSkill, SessionWindow
 from src.strategies.generated.xauusd_snd_qm_structure_m5_v1 import XauusdSndQmStructureM5
 from src.strategies.registry import StrategyRegistry
 
@@ -202,6 +203,92 @@ async def test_run_backtest_records_risk_override(database_url):
     assert report.risk_per_trade_pct == 0.5
 
 
+# ── `bot_skill` (bot-level backtest, src.backtest.bot_cli) ──────────────────
+# `FixedSkillSelector` (the default, exercised by every test above) ignores a
+# bot's sessions/risk_multiplier/param_overrides entirely. These pin that
+# `bot_skill` actually routes through them, the same way the live engine's
+# `SkillSelector`/`_effective_strategy` does — see run_backtest's `bot_skill`
+# docstring and .claude/skills/backtest/SKILL.md.
+
+
+def _bot_skill(**overrides) -> NormalSkill:
+    defaults = {
+        "name": "normal/xauusd/test_bot",
+        "symbol": "XAUUSD",
+        "strategy": "breakout_v1",
+        "risk_multiplier": 1.0,
+        "sessions": (),
+        "param_overrides": {},
+        "htf_veto_override": None,
+    }
+    defaults.update(overrides)
+    return NormalSkill(**defaults)
+
+
+async def test_bot_skill_session_window_blocks_every_trade_outside_it(database_url):
+    from datetime import time
+
+    # The fixture's two breakout episodes both fire well before 12:00 (see
+    # build_m5_candles's bar count vs M5_STEP) — a session that only opens in
+    # the afternoon must block both, where the plain `run_backtest` call in
+    # `test_backtest_closes_one_trade_via_tp_and_one_via_sl` gets 2 trades.
+    skill = _bot_skill(sessions=(SessionWindow(start=time(12, 0), end=time(23, 59)),))
+    report = await run_backtest(
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        bot_skill=skill,
+    )
+    assert report.trades == ()
+    assert any(
+        "outside trading session" in e.message and "test_bot" in e.message
+        for e in report.activity_log
+    )
+
+
+async def test_bot_skill_risk_multiplier_scales_position_size(database_url):
+    full = await run_backtest(
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        bot_skill=_bot_skill(risk_multiplier=1.0),
+    )
+    half = await run_backtest(
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        bot_skill=_bot_skill(risk_multiplier=0.5),
+    )
+    assert len(full.trades) == len(half.trades) == 2
+    for full_trade, half_trade in zip(full.trades, half.trades, strict=True):
+        assert half_trade.volume == pytest.approx(full_trade.volume * 0.5, rel=0.05)
+
+
+async def test_bot_skill_param_overrides_change_signal_behaviour(database_url):
+    """breakout_v1's TP_RR default is 2.2 (pinned by
+    `test_backtest_closes_one_trade_via_tp_and_one_via_sl`'s
+    `tp_trade.r_multiple == 2.2`) — overriding `tp_rr` through the bot's skill
+    must actually reach the strategy, not just get recorded and ignored.
+    3.0 (not something below 2.2) so the wider target still clears
+    SpreadGate's real min_rr=1.5 floor — a too-tight override would get
+    rejected at the spread/RR gate, which is a different code path than the
+    one this test exists to pin."""
+    skill = _bot_skill(param_overrides={"tp_rr": 3.0})
+    report = await run_backtest(
+        "breakout_v1",
+        "XAUUSD",
+        "2025-01:2025-01",
+        database_url=database_url,
+        bot_skill=skill,
+        simulate_broker_constraints=False,
+    )
+    tp_trade = next(t for t in report.trades if t.profit > 0)
+    assert tp_trade.r_multiple == pytest.approx(3.0, rel=1e-3)
+
+
 async def test_backtest_raises_when_no_history(database_url):
     from src.backtest.application.run_backtest import NoHistoryError
 
@@ -308,11 +395,10 @@ async def test_backtest_uses_db_backed_symbol_spec_without_any_yaml(tmp_path, da
 async def test_run_backtest_min_lot_fallback_override(tmp_path, database_url):
     """`_minimal_configs_dir`'s risk.yaml has no min_lot_fallback_enabled key
     (defaults False) — a $50 balance is too small for breakout_v1's normal
-    risk % to reach volume_min. The engine's sizing rejection is
-    intentionally bypassed (trade_loop.py: "BYPASSED PER USER REQUEST, USING
-    MIN VOLUME"), so both signals still open at volume_min. Passing the
-    override params turns on the real min-lot fallback instead, which opens
-    the same two signals through its own logged path."""
+    risk % to reach volume_min, so sizing rejects both signals with the file
+    default. Passing the override params to run_backtest() turns the
+    fallback on for this call only, without touching the file, and the same
+    two signals now open."""
     configs_dir = _minimal_configs_dir(tmp_path, xauusd_yaml=False)
     engine = create_engine(database_url)
     SymbolSpecRepository(sessionmaker(bind=engine, expire_on_commit=False)).upsert(
@@ -327,10 +413,7 @@ async def test_run_backtest_min_lot_fallback_override(tmp_path, database_url):
         configs_dir=configs_dir,
         starting_balance=50.0,
     )
-    assert len(report.trades) == 2
-    assert all(t.volume == _spec().volume_min for t in report.trades)
-    assert any("USING MIN VOLUME" in e.message for e in report.activity_log)
-    assert not any("min-lot fallback" in e.message for e in report.activity_log)
+    assert len(report.trades) == 0
 
     report = await run_backtest(
         "breakout_v1",
@@ -360,11 +443,12 @@ async def test_backtest_raises_no_symbol_spec_without_db_row_or_yaml(tmp_path, d
 
 
 async def test_db_symbol_spec_takes_precedence_over_legacy_yaml(tmp_path, database_url):
-    """The legacy YAML has a normal volume_min (0.01). The DB row's
-    volume_min is set absurdly high (1000): risk sizing rejects that, and
-    the bypassed sizing gate then forces the trade to volume_min. So every
-    trade opening at 1000 lots, not 0.01, proves the DB row is the one
-    actually used."""
+    """The legacy YAML has a normal volume_min (0.01, same as the main
+    fixture test above, which trades fine). The DB row's volume_min is set
+    absurdly high (1000) — risk-based position sizing can never produce a
+    viable lot size that large, so no trade opens. If the YAML were still
+    winning over the DB row, trades would go through exactly like the main
+    test; zero trades here proves the DB row is the one actually used."""
     configs_dir = _minimal_configs_dir(tmp_path, xauusd_yaml=True)
     engine = create_engine(database_url)
     repository = SymbolSpecRepository(sessionmaker(bind=engine, expire_on_commit=False))
@@ -389,5 +473,5 @@ async def test_db_symbol_spec_takes_precedence_over_legacy_yaml(tmp_path, databa
         configs_dir=configs_dir,
     )
 
-    assert report.trades
+    assert report.trades == ()
     assert all(t.volume == 1000.0 for t in report.trades)
