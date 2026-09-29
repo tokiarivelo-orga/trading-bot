@@ -60,6 +60,9 @@ from src.shared.config.settings import CONFIGS_DIR, load_yaml_config
 from src.shared.db.base import make_session_factory
 from src.shared.events.bus import EventBus
 from src.shared.events.definitions import CandleClosed, PositionClosed, PositionOpened
+from src.skills.application.skill_selector import SkillSelector
+from src.skills.domain.models import NormalSkill
+from src.skills.ports.skill_selector import SkillSelectorPort
 from src.strategies.adapters.repository import StrategyVersionRepository
 from src.strategies.application.versioning import StrategyVersionService
 from src.strategies.generated.breakout_v1 import BreakoutV1
@@ -131,6 +134,7 @@ async def run_backtest(
     period: str,
     *,
     strategy_source: StrategySourcePort | None = None,
+    bot_skill: NormalSkill | None = None,
     starting_balance: float = DEFAULT_STARTING_BALANCE,
     database_url: str = DEFAULT_DATABASE_URL,
     configs_dir: Path = CONFIGS_DIR,
@@ -143,7 +147,21 @@ async def run_backtest(
     slippage_samples: Sequence[float] | None = None,
     slippage_seed: int = SlippageSampler.DEFAULT_SEED,
 ) -> BacktestReport:
-    """`min_lot_fallback_enabled`/`max_risk_per_trade_pct`, when given, override
+    """`bot_skill`, when given, replays this exact deployed bot instead of the
+    raw strategy: its session windows gate which bars can enter (via the same
+    `SkillSelector`/`NormalSkill.is_active` the live engine uses), and its
+    `risk_multiplier`/`param_overrides`/`htf_veto_override` are applied the
+    same way `engine.application.trade_loop._effective_strategy` applies them
+    live. `None` (the default, and the only mode `src.backtest.cli` offers)
+    tests the strategy alone via `FixedSkillSelector` — no session gating, no
+    per-bot risk multiplier, no per-bot param overrides — which answers "how
+    would this strategy have performed" rather than "how would this bot have
+    performed"; the two can diverge sharply for a bot with real overrides.
+    `strategy_name` must still name `bot_skill.strategy`'s family — callers
+    (e.g. `src.backtest.bot_cli`) resolve that from the skill themselves so
+    this function doesn't have to re-derive it.
+
+    `min_lot_fallback_enabled`/`max_risk_per_trade_pct`, when given, override
     `configs/risk.yaml`'s values for this run only — lets you try a different
     min-lot fallback setting on a small-balance backtest before flipping it
     on for the live bot via `PUT /engine/risk-caps/min-lot-fallback`. `None`
@@ -325,13 +343,22 @@ async def run_backtest(
     event_bus.subscribe(PositionOpened, bookkeeper.on_position_opened)
     event_bus.subscribe(PositionClosed, bookkeeper.on_position_closed)
 
+    skill_selector: SkillSelectorPort
+    if bot_skill is None:
+        skill_selector = FixedSkillSelector(strategy_name)
+    else:
+        app_config = load_yaml_config("app", configs_dir)
+        skill_selector = SkillSelector(
+            {symbol: [bot_skill]}, timezone=app_config.get("timezone", "UTC")
+        )
+
     trade_engine = TradeEngine(
         market_data=replay,
         order_service=order_service,
         account=bookkeeper,
         risk_manager=risk_manager,
         position_manager=position_manager,
-        skill_selector=FixedSkillSelector(strategy_name),
+        skill_selector=skill_selector,
         strategy_source=registry,
         entry_timeframe=strategy.spec.entry_timeframe,
         regime_config=regime_config,

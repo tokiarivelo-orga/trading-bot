@@ -49,6 +49,30 @@ differently — pick based on what the strategy's status actually is
 If unsure which applies, default to the API job path — it's a strict superset
 (handles both statuses, auto-backfills) and it's what the product itself uses.
 
+## Strategy-level vs bot-level
+
+Both entry points above test the **strategy alone**: they ignore every
+per-bot override a `skills/normal/<symbol>/<bot_slug>.yaml` carries (its
+`sessions`, `risk_multiplier`, `param_overrides`, `htf_veto_override`) via
+`FixedSkillSelector`, ala "how would this strategy have performed" — not "how
+would this deployed bot have performed." For a strategy whose bot has no real
+overrides that's the same question. For one that does (session windows, a
+non-1.0 `risk_multiplier`, any `param_overrides`), the two can diverge
+sharply — e.g. a bot with real overrides can show a materially different
+profit factor between the two paths for the identical symbol/period.
+
+When the task is "how has bot X actually been performing" (not "how good is
+strategy Y in the abstract"), use the **bot-level CLI** instead:
+`uv run python -m src.backtest.bot_cli <bot_slug> <symbol> <period>` from
+`backend/`, or `make backtest-bot bot=... symbol=... period=...` from the
+repo root. `<bot_slug>` is the skill YAML's filename without `.yaml`. It
+loads that bot's actual `NormalSkill` and replays through the same
+`SkillSelector`/`_effective_strategy` path the live engine uses — session
+gating, risk multiplier, and param overrides all apply. Report filename is
+`<bot_slug>_<symbol>_<period_with_underscores>.json`, distinct from the
+strategy-level filename so the two never collide. No API-job equivalent
+exists yet — CLI only, no auto-backfill.
+
 ## Steps
 1. Check whether history already covers `<period>` for `<symbol>`. If using
    the CLI path and it isn't there yet, backfill first:

@@ -197,6 +197,12 @@ backtest: ## Run a strategy backtest: make backtest strategy=breakout_v1 symbol=
 		{ echo 'usage: make backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-06'; exit 1; }
 	cd backend && uv run python -m src.backtest.cli "$(strategy)" "$(symbol)" "$(period)"
 
+.PHONY: backtest-bot
+backtest-bot: ## Run a BOT-level backtest (applies its skill's sessions/risk_multiplier/param_overrides, unlike `backtest`): make backtest-bot bot=xauusd_structure_shift_m1 symbol=XAUUSD period=2025-01:2025-06
+	@test -n "$(bot)" && test -n "$(symbol)" && test -n "$(period)" || \
+		{ echo 'usage: make backtest-bot bot=xauusd_structure_shift_m1 symbol=XAUUSD period=2025-01:2025-06'; exit 1; }
+	cd backend && uv run python -m src.backtest.bot_cli "$(bot)" "$(symbol)" "$(period)"
+
 .PHONY: walk-forward-backtest
 walk-forward-backtest: ## Run a walk-forward backtest (independent out-of-sample folds, not in-sample refit): make walk-forward-backtest strategy=breakout_v1 symbol=XAUUSD period=2025-01:2025-12 [fold_months=1]
 	@test -n "$(strategy)" && test -n "$(symbol)" && test -n "$(period)" || \
